@@ -116,4 +116,161 @@ mod tests {
         assert_eq!(log2(1024), 10);
         assert_eq!(log2(65536), 16);
     }
+
+    #[test]
+    fn test_log2_large() {
+        assert_eq!(log2(1 << 20), 20);
+        assert_eq!(log2(1 << 30), 30);
+    }
+
+    #[test]
+    #[should_panic(expected = "power of 2")]
+    fn test_log2_non_power_of_two() {
+        log2(3);
+    }
+
+    #[test]
+    #[should_panic(expected = "power of 2")]
+    fn test_log2_zero() {
+        log2(0);
+    }
+
+    #[test]
+    fn test_derive_content_key_deterministic() {
+        let master = [0x42u8; 32];
+        let k1 = derive_content_key(&master).unwrap();
+        let k2 = derive_content_key(&master).unwrap();
+        assert_eq!(*k1, *k2);
+    }
+
+    #[test]
+    fn test_derive_filename_key_deterministic() {
+        let master = [0x42u8; 32];
+        let k1 = derive_filename_key(&master).unwrap();
+        let k2 = derive_filename_key(&master).unwrap();
+        assert_eq!(*k1, *k2);
+    }
+
+    #[test]
+    fn test_content_and_filename_keys_differ() {
+        let master = [0x42u8; 32];
+        let ck = derive_content_key(&master).unwrap();
+        let fk = derive_filename_key(&master).unwrap();
+        assert_ne!(*ck, *fk);
+    }
+
+    #[test]
+    fn test_different_master_keys_yield_different_content_keys() {
+        let m1 = [0x01u8; 32];
+        let m2 = [0x02u8; 32];
+        let ck1 = derive_content_key(&m1).unwrap();
+        let ck2 = derive_content_key(&m2).unwrap();
+        assert_ne!(*ck1, *ck2);
+    }
+
+    #[test]
+    fn test_different_master_keys_yield_different_filename_keys() {
+        let m1 = [0x01u8; 32];
+        let m2 = [0x02u8; 32];
+        let fk1 = derive_filename_key(&m1).unwrap();
+        let fk2 = derive_filename_key(&m2).unwrap();
+        assert_ne!(*fk1, *fk2);
+    }
+
+    #[test]
+    fn test_derive_master_key_wrong_password() {
+        use base64::engine::general_purpose::STANDARD;
+        use base64::Engine;
+
+        // Build a minimal valid config with known values
+        let salt = [0xAA; 32];
+        let password = "correct-password";
+
+        // Derive a wrapping key with small scrypt params
+        let scrypt_params = scrypt::Params::new(4, 8, 1, 32).unwrap(); // N=16 for speed
+        let mut wrapping_key = [0u8; 32];
+        scrypt::scrypt(password.as_bytes(), &salt, &scrypt_params, &mut wrapping_key).unwrap();
+
+        // Encrypt a fake master key
+        use aes_gcm::{aead::{Aead, KeyInit}, Aes256Gcm, Nonce};
+        let cipher = Aes256Gcm::new_from_slice(&wrapping_key).unwrap();
+        let nonce_bytes = [0u8; 12];
+        let nonce = Nonce::from_slice(&nonce_bytes);
+        let fake_master = [0xBB; 32];
+        let encrypted_master = cipher.encrypt(nonce, fake_master.as_ref()).unwrap();
+
+        let mut encrypted_key_full = Vec::new();
+        encrypted_key_full.extend_from_slice(&nonce_bytes);
+        encrypted_key_full.extend_from_slice(&encrypted_master);
+
+        let config = crate::crypto::config::GocryptfsConfig {
+            creator: "test".into(),
+            encrypted_key: STANDARD.encode(&encrypted_key_full),
+            scrypt_object: crate::crypto::config::ScryptObject {
+                salt: STANDARD.encode(&salt),
+                n: 16,
+                r: 8,
+                p: 1,
+                key_len: 32,
+            },
+            version: 2,
+            feature_flags: vec!["GCMIV128".into(), "HKDF".into(), "DirIV".into(), "EMENames".into()],
+        };
+
+        // Correct password works
+        let result = derive_master_key(password, &config);
+        assert!(result.is_ok());
+        assert_eq!(*result.unwrap(), fake_master);
+
+        // Wrong password fails
+        let result = derive_master_key("wrong-password", &config);
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            KdfError::DecryptionFailed => {} // expected
+            other => panic!("Expected DecryptionFailed, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_derive_master_key_invalid_encrypted_key_length() {
+        use base64::engine::general_purpose::STANDARD;
+        use base64::Engine;
+
+        let config = crate::crypto::config::GocryptfsConfig {
+            creator: "test".into(),
+            encrypted_key: STANDARD.encode(&[0u8; 10]), // too short: < 12+16
+            scrypt_object: crate::crypto::config::ScryptObject {
+                salt: STANDARD.encode(&[0u8; 32]),
+                n: 16,
+                r: 8,
+                p: 1,
+                key_len: 32,
+            },
+            version: 2,
+            feature_flags: vec!["GCMIV128".into()],
+        };
+
+        let result = derive_master_key("anything", &config);
+        assert!(matches!(result, Err(KdfError::InvalidKeyLength)));
+    }
+
+    #[test]
+    fn test_derive_master_key_bad_base64_salt() {
+        let config = crate::crypto::config::GocryptfsConfig {
+            creator: "test".into(),
+            encrypted_key: "valid_base64_but_irrelevant".into(),
+            scrypt_object: crate::crypto::config::ScryptObject {
+                salt: "not-valid-base64!!!".into(),
+                n: 16,
+                r: 8,
+                p: 1,
+                key_len: 32,
+            },
+            version: 2,
+            feature_flags: vec![],
+        };
+
+        let result = derive_master_key("password", &config);
+        assert!(result.is_err());
+    }
 }

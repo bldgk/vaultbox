@@ -148,3 +148,227 @@ impl Seek for StreamingReader {
         Ok(self.position)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::{Read, Seek, SeekFrom};
+
+    /// Helper: encrypt plaintext and write to a temp file, return path
+    fn write_encrypted_file(key: &[u8; 32], plaintext: &[u8]) -> tempfile::NamedTempFile {
+        let encrypted = content::encrypt_file(key, plaintext).unwrap();
+        let mut f = tempfile::NamedTempFile::new().unwrap();
+        std::io::Write::write_all(&mut f, &encrypted).unwrap();
+        f
+    }
+
+    #[test]
+    fn test_streaming_read_small_file() {
+        let key = [0x42u8; 32];
+        let plaintext = b"hello streaming world";
+        let f = write_encrypted_file(&key, plaintext);
+
+        let mut reader = StreamingReader::open(f.path(), &key).unwrap();
+        assert_eq!(reader.plaintext_size(), plaintext.len() as u64);
+
+        let mut buf = Vec::new();
+        reader.read_to_end(&mut buf).unwrap();
+        assert_eq!(buf, plaintext);
+    }
+
+    #[test]
+    fn test_streaming_read_empty_file() {
+        let key = [0x42u8; 32];
+        let f = write_encrypted_file(&key, b"");
+
+        let mut reader = StreamingReader::open(f.path(), &key).unwrap();
+        assert_eq!(reader.plaintext_size(), 0);
+
+        let mut buf = Vec::new();
+        reader.read_to_end(&mut buf).unwrap();
+        assert!(buf.is_empty());
+    }
+
+    #[test]
+    fn test_streaming_read_multi_block() {
+        let key = [0x42u8; 32];
+        let plaintext: Vec<u8> = (0..10000).map(|i| (i % 256) as u8).collect();
+        let f = write_encrypted_file(&key, &plaintext);
+
+        let mut reader = StreamingReader::open(f.path(), &key).unwrap();
+        assert_eq!(reader.plaintext_size(), plaintext.len() as u64);
+
+        let mut buf = Vec::new();
+        reader.read_to_end(&mut buf).unwrap();
+        assert_eq!(buf, plaintext);
+    }
+
+    #[test]
+    fn test_streaming_read_exact_block_size() {
+        let key = [0x42u8; 32];
+        let plaintext = vec![0xAB; BLOCK_SIZE_PLAIN];
+        let f = write_encrypted_file(&key, &plaintext);
+
+        let mut reader = StreamingReader::open(f.path(), &key).unwrap();
+        let mut buf = Vec::new();
+        reader.read_to_end(&mut buf).unwrap();
+        assert_eq!(buf, plaintext);
+    }
+
+    #[test]
+    fn test_streaming_seek_start() {
+        let key = [0x42u8; 32];
+        let plaintext = b"abcdefghij";
+        let f = write_encrypted_file(&key, plaintext);
+
+        let mut reader = StreamingReader::open(f.path(), &key).unwrap();
+
+        // Read first 3 bytes
+        let mut buf = [0u8; 3];
+        reader.read_exact(&mut buf).unwrap();
+        assert_eq!(&buf, b"abc");
+
+        // Seek back to start
+        reader.seek(SeekFrom::Start(0)).unwrap();
+        reader.read_exact(&mut buf).unwrap();
+        assert_eq!(&buf, b"abc");
+    }
+
+    #[test]
+    fn test_streaming_seek_to_offset() {
+        let key = [0x42u8; 32];
+        let plaintext = b"0123456789";
+        let f = write_encrypted_file(&key, plaintext);
+
+        let mut reader = StreamingReader::open(f.path(), &key).unwrap();
+        reader.seek(SeekFrom::Start(5)).unwrap();
+
+        let mut buf = Vec::new();
+        reader.read_to_end(&mut buf).unwrap();
+        assert_eq!(buf, b"56789");
+    }
+
+    #[test]
+    fn test_streaming_seek_end() {
+        let key = [0x42u8; 32];
+        let plaintext = b"0123456789";
+        let f = write_encrypted_file(&key, plaintext);
+
+        let mut reader = StreamingReader::open(f.path(), &key).unwrap();
+        let pos = reader.seek(SeekFrom::End(-3)).unwrap();
+        assert_eq!(pos, 7);
+
+        let mut buf = Vec::new();
+        reader.read_to_end(&mut buf).unwrap();
+        assert_eq!(buf, b"789");
+    }
+
+    #[test]
+    fn test_streaming_seek_current() {
+        let key = [0x42u8; 32];
+        let plaintext = b"abcdefghij";
+        let f = write_encrypted_file(&key, plaintext);
+
+        let mut reader = StreamingReader::open(f.path(), &key).unwrap();
+        reader.seek(SeekFrom::Start(2)).unwrap();
+        reader.seek(SeekFrom::Current(3)).unwrap();
+
+        let mut buf = [0u8; 1];
+        reader.read_exact(&mut buf).unwrap();
+        assert_eq!(buf[0], b'f'); // position 5
+    }
+
+    #[test]
+    fn test_streaming_seek_before_start_fails() {
+        let key = [0x42u8; 32];
+        let plaintext = b"test";
+        let f = write_encrypted_file(&key, plaintext);
+
+        let mut reader = StreamingReader::open(f.path(), &key).unwrap();
+        let result = reader.seek(SeekFrom::Current(-1));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_streaming_seek_past_end_reads_zero() {
+        let key = [0x42u8; 32];
+        let plaintext = b"test";
+        let f = write_encrypted_file(&key, plaintext);
+
+        let mut reader = StreamingReader::open(f.path(), &key).unwrap();
+        reader.seek(SeekFrom::Start(100)).unwrap();
+
+        let mut buf = [0u8; 10];
+        let n = reader.read(&mut buf).unwrap();
+        assert_eq!(n, 0); // EOF
+    }
+
+    #[test]
+    fn test_streaming_partial_reads() {
+        let key = [0x42u8; 32];
+        let plaintext: Vec<u8> = (0..100).collect();
+        let f = write_encrypted_file(&key, &plaintext);
+
+        let mut reader = StreamingReader::open(f.path(), &key).unwrap();
+        let mut result = Vec::new();
+
+        // Read in small chunks
+        let mut buf = [0u8; 7];
+        loop {
+            let n = reader.read(&mut buf).unwrap();
+            if n == 0 {
+                break;
+            }
+            result.extend_from_slice(&buf[..n]);
+        }
+        assert_eq!(result, plaintext);
+    }
+
+    #[test]
+    fn test_streaming_read_across_block_boundary() {
+        let key = [0x42u8; 32];
+        // Plaintext spanning 2 blocks
+        let plaintext: Vec<u8> = (0u8..200).cycle().take(BLOCK_SIZE_PLAIN + 100).collect();
+        let f = write_encrypted_file(&key, &plaintext);
+
+        let mut reader = StreamingReader::open(f.path(), &key).unwrap();
+
+        // Seek to near the block boundary and read across it
+        let offset = BLOCK_SIZE_PLAIN as u64 - 10;
+        reader.seek(SeekFrom::Start(offset)).unwrap();
+
+        let mut buf = [0u8; 20]; // reads 10 from block 0, 10 from block 1
+        reader.read_exact(&mut buf).unwrap();
+        assert_eq!(&buf[..], &plaintext[offset as usize..offset as usize + 20]);
+    }
+
+    #[test]
+    fn test_streaming_open_invalid_file() {
+        let key = [0x42u8; 32];
+        let mut f = tempfile::NamedTempFile::new().unwrap();
+        std::io::Write::write_all(&mut f, b"too small").unwrap();
+
+        let result = StreamingReader::open(f.path(), &key);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_streaming_cache_efficiency() {
+        let key = [0x42u8; 32];
+        let plaintext = vec![0xAB; BLOCK_SIZE_PLAIN * 3]; // 3 blocks
+        let f = write_encrypted_file(&key, &plaintext);
+
+        let mut reader = StreamingReader::open(f.path(), &key).unwrap();
+
+        // Read all data
+        let mut buf = Vec::new();
+        reader.read_to_end(&mut buf).unwrap();
+        assert_eq!(buf, plaintext);
+
+        // Seek back and read again (should hit cache)
+        reader.seek(SeekFrom::Start(0)).unwrap();
+        let mut buf2 = Vec::new();
+        reader.read_to_end(&mut buf2).unwrap();
+        assert_eq!(buf2, plaintext);
+    }
+}

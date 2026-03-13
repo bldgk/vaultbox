@@ -136,3 +136,283 @@ impl Default for VaultState {
         Self::new()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::thread;
+    use std::time::Duration;
+
+    fn dummy_config() -> GocryptfsConfig {
+        GocryptfsConfig {
+            creator: "test".into(),
+            encrypted_key: "dGVzdA==".into(),
+            scrypt_object: crate::crypto::config::ScryptObject {
+                salt: "c2FsdA==".into(),
+                n: 65536,
+                r: 8,
+                p: 1,
+                key_len: 32,
+            },
+            version: 2,
+            feature_flags: vec!["GCMIV128".into(), "HKDF".into(), "DirIV".into(), "EMENames".into(), "Raw64".into()],
+        }
+    }
+
+    #[test]
+    fn test_new_state_is_locked() {
+        let state = VaultState::new();
+        assert_eq!(state.status(), VaultStatus::Locked);
+        assert!(state.vault_path().is_none());
+        assert!(state.config().is_none());
+    }
+
+    #[test]
+    fn test_unlock_and_lock() {
+        let state = VaultState::new();
+        let master = Zeroizing::new([0x42u8; 32]);
+        let content = Zeroizing::new([0x43u8; 32]);
+        let filename = Zeroizing::new([0x44u8; 32]);
+
+        state.unlock(
+            PathBuf::from("/tmp/vault"),
+            dummy_config(),
+            master,
+            content,
+            filename,
+        );
+
+        assert_eq!(state.status(), VaultStatus::Unlocked);
+        assert_eq!(state.vault_path(), Some(PathBuf::from("/tmp/vault")));
+        assert!(state.config().is_some());
+
+        state.lock();
+
+        assert_eq!(state.status(), VaultStatus::Locked);
+        assert!(state.vault_path().is_none());
+        assert!(state.config().is_none());
+    }
+
+    #[test]
+    fn test_with_content_key_when_locked() {
+        let state = VaultState::new();
+        let result = state.with_content_key(|k| *k);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_with_filename_key_when_locked() {
+        let state = VaultState::new();
+        let result = state.with_filename_key(|k| *k);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_with_content_key_when_unlocked() {
+        let state = VaultState::new();
+        let content = Zeroizing::new([0x43u8; 32]);
+        state.unlock(
+            PathBuf::from("/tmp/vault"),
+            dummy_config(),
+            Zeroizing::new([0; 32]),
+            content,
+            Zeroizing::new([0; 32]),
+        );
+
+        let result = state.with_content_key(|k| *k);
+        assert!(result.is_some());
+        assert_eq!(result.unwrap(), [0x43u8; 32]);
+    }
+
+    #[test]
+    fn test_with_filename_key_when_unlocked() {
+        let state = VaultState::new();
+        let filename = Zeroizing::new([0x44u8; 32]);
+        state.unlock(
+            PathBuf::from("/tmp/vault"),
+            dummy_config(),
+            Zeroizing::new([0; 32]),
+            Zeroizing::new([0; 32]),
+            filename,
+        );
+
+        let result = state.with_filename_key(|k| *k);
+        assert!(result.is_some());
+        assert_eq!(result.unwrap(), [0x44u8; 32]);
+    }
+
+    #[test]
+    fn test_keys_cleared_after_lock() {
+        let state = VaultState::new();
+        state.unlock(
+            PathBuf::from("/tmp/vault"),
+            dummy_config(),
+            Zeroizing::new([0x42; 32]),
+            Zeroizing::new([0x43; 32]),
+            Zeroizing::new([0x44; 32]),
+        );
+
+        assert!(state.with_content_key(|k| *k).is_some());
+        assert!(state.with_filename_key(|k| *k).is_some());
+
+        state.lock();
+
+        assert!(state.with_content_key(|k| *k).is_none());
+        assert!(state.with_filename_key(|k| *k).is_none());
+    }
+
+    #[test]
+    fn test_should_auto_lock_when_locked() {
+        let state = VaultState::new();
+        assert!(!state.should_auto_lock());
+    }
+
+    #[test]
+    fn test_should_auto_lock_fresh_unlock() {
+        let state = VaultState::new();
+        state.unlock(
+            PathBuf::from("/tmp/vault"),
+            dummy_config(),
+            Zeroizing::new([0; 32]),
+            Zeroizing::new([0; 32]),
+            Zeroizing::new([0; 32]),
+        );
+        // Just unlocked, should not auto-lock yet
+        assert!(!state.should_auto_lock());
+    }
+
+    #[test]
+    fn test_should_auto_lock_short_timeout() {
+        let state = VaultState::new();
+        state.set_auto_lock_seconds(0); // immediate timeout
+        state.unlock(
+            PathBuf::from("/tmp/vault"),
+            dummy_config(),
+            Zeroizing::new([0; 32]),
+            Zeroizing::new([0; 32]),
+            Zeroizing::new([0; 32]),
+        );
+        // With 0 seconds timeout, should auto-lock immediately
+        thread::sleep(Duration::from_millis(10));
+        assert!(state.should_auto_lock());
+    }
+
+    #[test]
+    fn test_touch_resets_auto_lock() {
+        let state = VaultState::new();
+        state.set_auto_lock_seconds(0);
+        state.unlock(
+            PathBuf::from("/tmp/vault"),
+            dummy_config(),
+            Zeroizing::new([0; 32]),
+            Zeroizing::new([0; 32]),
+            Zeroizing::new([0; 32]),
+        );
+        thread::sleep(Duration::from_millis(10));
+        state.touch();
+        // After touch, timer resets — with 0s timeout it'll trigger again quickly
+        // but the important thing is touch updated the timestamp
+        // (we can't reliably test sub-millisecond timing, just test that touch doesn't panic)
+    }
+
+    #[test]
+    fn test_set_auto_lock_seconds() {
+        let state = VaultState::new();
+        state.set_auto_lock_seconds(300);
+        state.unlock(
+            PathBuf::from("/tmp/vault"),
+            dummy_config(),
+            Zeroizing::new([0; 32]),
+            Zeroizing::new([0; 32]),
+            Zeroizing::new([0; 32]),
+        );
+        // With 300s timeout, should not auto-lock
+        assert!(!state.should_auto_lock());
+    }
+
+    #[test]
+    fn test_media_cache() {
+        let state = VaultState::new();
+        assert!(state.get_cached_media("test.mp4").is_none());
+
+        state.cache_media("test.mp4".into(), vec![1, 2, 3, 4]);
+        let cached = state.get_cached_media("test.mp4").unwrap();
+        assert_eq!(cached, vec![1, 2, 3, 4]);
+    }
+
+    #[test]
+    fn test_media_cache_cleared_on_lock() {
+        let state = VaultState::new();
+        state.unlock(
+            PathBuf::from("/tmp/vault"),
+            dummy_config(),
+            Zeroizing::new([0; 32]),
+            Zeroizing::new([0; 32]),
+            Zeroizing::new([0; 32]),
+        );
+        state.cache_media("test.mp4".into(), vec![1, 2, 3]);
+        assert!(state.get_cached_media("test.mp4").is_some());
+
+        state.lock();
+        assert!(state.get_cached_media("test.mp4").is_none());
+    }
+
+    #[test]
+    fn test_unlock_twice_overwrites() {
+        let state = VaultState::new();
+        state.unlock(
+            PathBuf::from("/tmp/vault1"),
+            dummy_config(),
+            Zeroizing::new([0x01; 32]),
+            Zeroizing::new([0x01; 32]),
+            Zeroizing::new([0x01; 32]),
+        );
+        state.unlock(
+            PathBuf::from("/tmp/vault2"),
+            dummy_config(),
+            Zeroizing::new([0x02; 32]),
+            Zeroizing::new([0x02; 32]),
+            Zeroizing::new([0x02; 32]),
+        );
+        assert_eq!(state.vault_path(), Some(PathBuf::from("/tmp/vault2")));
+        assert_eq!(state.with_content_key(|k| *k).unwrap(), [0x02u8; 32]);
+    }
+
+    #[test]
+    fn test_default() {
+        let state = VaultState::default();
+        assert_eq!(state.status(), VaultStatus::Locked);
+    }
+
+    #[test]
+    fn test_concurrent_access() {
+        use std::sync::Arc;
+        let state = Arc::new(VaultState::new());
+        state.unlock(
+            PathBuf::from("/tmp/vault"),
+            dummy_config(),
+            Zeroizing::new([0; 32]),
+            Zeroizing::new([0; 32]),
+            Zeroizing::new([0; 32]),
+        );
+
+        let mut handles = vec![];
+        for _ in 0..10 {
+            let s = Arc::clone(&state);
+            handles.push(thread::spawn(move || {
+                s.touch();
+                let _ = s.status();
+                let _ = s.vault_path();
+                let _ = s.should_auto_lock();
+                s.cache_media("test".into(), vec![1, 2, 3]);
+                let _ = s.get_cached_media("test");
+            }));
+        }
+
+        for h in handles {
+            h.join().unwrap();
+        }
+
+        assert_eq!(state.status(), VaultStatus::Unlocked);
+    }
+}

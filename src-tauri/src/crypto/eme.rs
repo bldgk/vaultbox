@@ -213,4 +213,140 @@ mod tests {
             assert_eq!(decrypted, plaintext, "Failed for {} blocks", num_blocks);
         }
     }
+
+    // --- New tests ---
+
+    #[test]
+    fn test_eme_different_keys_produce_different_ciphertext() {
+        let key1 = [0x42u8; 32];
+        let key2 = [0x43u8; 32];
+        let tweak = [0x01u8; 16];
+        let plaintext = [0xABu8; 32];
+
+        let ct1 = eme_encrypt(&key1, &tweak, &plaintext);
+        let ct2 = eme_encrypt(&key2, &tweak, &plaintext);
+        assert_ne!(ct1, ct2);
+    }
+
+    #[test]
+    fn test_eme_different_tweaks_produce_different_ciphertext() {
+        let key = [0x42u8; 32];
+        let tweak1 = [0x01u8; 16];
+        let tweak2 = [0x02u8; 16];
+        let plaintext = [0xABu8; 32];
+
+        let ct1 = eme_encrypt(&key, &tweak1, &plaintext);
+        let ct2 = eme_encrypt(&key, &tweak2, &plaintext);
+        assert_ne!(ct1, ct2);
+    }
+
+    #[test]
+    fn test_eme_ciphertext_same_length_as_plaintext() {
+        for num_blocks in 1..=8 {
+            let key = [0x42u8; 32];
+            let tweak = [0x01u8; 16];
+            let plaintext = vec![0xABu8; num_blocks * 16];
+            let ciphertext = eme_encrypt(&key, &tweak, &plaintext);
+            assert_eq!(ciphertext.len(), plaintext.len());
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "non-empty and a multiple of 16")]
+    fn test_eme_empty_input_panics() {
+        let key = [0x42u8; 32];
+        let tweak = [0x01u8; 16];
+        eme_encrypt(&key, &tweak, &[]);
+    }
+
+    #[test]
+    #[should_panic(expected = "non-empty and a multiple of 16")]
+    fn test_eme_non_block_aligned_panics() {
+        let key = [0x42u8; 32];
+        let tweak = [0x01u8; 16];
+        eme_encrypt(&key, &tweak, &[0xAB; 15]);
+    }
+
+    #[test]
+    fn test_eme_all_zeros() {
+        let key = [0u8; 32];
+        let tweak = [0u8; 16];
+        let plaintext = [0u8; 32];
+
+        let ciphertext = eme_encrypt(&key, &tweak, &plaintext);
+        // Should produce non-zero ciphertext (AES of zeros is not zeros)
+        assert_ne!(ciphertext, plaintext.to_vec());
+
+        let decrypted = eme_decrypt(&key, &tweak, &ciphertext);
+        assert_eq!(decrypted, plaintext.to_vec());
+    }
+
+    #[test]
+    fn test_eme_large_16_blocks() {
+        let key: [u8; 32] = (0..32).collect::<Vec<u8>>().try_into().unwrap();
+        let tweak: [u8; 16] = (0..16).collect::<Vec<u8>>().try_into().unwrap();
+        let plaintext: Vec<u8> = (0..256).map(|i| (i % 256) as u8).collect(); // 16 blocks
+
+        let ciphertext = eme_encrypt(&key, &tweak, &plaintext);
+        let decrypted = eme_decrypt(&key, &tweak, &ciphertext);
+        assert_eq!(decrypted, plaintext);
+    }
+
+    #[test]
+    fn test_mult_by_two_basic() {
+        let input = [0u8; BLOCK_SIZE];
+        let mut output = [0u8; BLOCK_SIZE];
+        mult_by_two(&input, &mut output);
+        assert_eq!(output, [0u8; BLOCK_SIZE]); // 2 * 0 = 0
+
+        let mut input2 = [0u8; BLOCK_SIZE];
+        input2[0] = 1;
+        let mut output2 = [0u8; BLOCK_SIZE];
+        mult_by_two(&input2, &mut output2);
+        assert_eq!(output2[0], 2); // 2 * 1 = 2
+    }
+
+    #[test]
+    fn test_mult_by_two_carry() {
+        // Test carry from byte to byte (high bit shifts into next byte)
+        let mut input = [0u8; BLOCK_SIZE];
+        input[1] = 0x80; // bit 7 set → carry into byte 0's calculation
+        let mut output = [0u8; BLOCK_SIZE];
+        mult_by_two(&input, &mut output);
+        // output[1] = 2*0x80 = 0x00 (overflow u8), output[2] += input[1]>>7 = 1
+        assert_eq!(output[1], 0);
+        assert_eq!(output[2], 1); // carry
+    }
+
+    #[test]
+    fn test_mult_by_two_reduction() {
+        // When MSB of last byte (input[15]) is set, XOR with 0x87
+        let mut input = [0u8; BLOCK_SIZE];
+        input[15] = 0x80;
+        let mut output = [0u8; BLOCK_SIZE];
+        mult_by_two(&input, &mut output);
+        // output[0] should have 0x87 XORed in (since input[15] >> 7 = 1)
+        assert_eq!(output[0], 0x87);
+    }
+
+    #[test]
+    fn test_eme_single_bit_plaintext_change_avalanche() {
+        let key = [0x42u8; 32];
+        let tweak = [0x01u8; 16];
+        let pt1 = [0u8; 32];
+        let mut pt2 = [0u8; 32];
+        pt2[0] = 1; // single bit difference
+
+        let ct1 = eme_encrypt(&key, &tweak, &pt1);
+        let ct2 = eme_encrypt(&key, &tweak, &pt2);
+
+        // Count differing bits (should be roughly half due to avalanche effect)
+        let diff_bits: u32 = ct1
+            .iter()
+            .zip(ct2.iter())
+            .map(|(a, b)| (a ^ b).count_ones())
+            .sum();
+        // Expect significant diffusion: at least 25% of bits differ
+        assert!(diff_bits > 32, "Poor avalanche: only {} bits differ", diff_bits);
+    }
 }

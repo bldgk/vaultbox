@@ -94,3 +94,175 @@ impl GocryptfsConfig {
         self.has_flag("EMENames")
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    fn make_config_json(version: u32, flags: &[&str]) -> String {
+        let flags_json: Vec<String> = flags.iter().map(|f| format!("\"{}\"", f)).collect();
+        format!(
+            r#"{{
+                "Creator": "test",
+                "EncryptedKey": "dGVzdA==",
+                "ScryptObject": {{
+                    "Salt": "c2FsdA==",
+                    "N": 65536,
+                    "R": 8,
+                    "P": 1,
+                    "KeyLen": 32
+                }},
+                "Version": {},
+                "FeatureFlags": [{}]
+            }}"#,
+            version,
+            flags_json.join(",")
+        )
+    }
+
+    #[test]
+    fn test_load_valid_config() {
+        let dir = tempfile::tempdir().unwrap();
+        let conf_path = dir.path().join("gocryptfs.conf");
+        let json = make_config_json(2, &["GCMIV128", "DirIV", "EMENames", "HKDF", "Raw64"]);
+        fs::write(&conf_path, &json).unwrap();
+
+        let config = GocryptfsConfig::load(dir.path()).unwrap();
+        assert_eq!(config.version, 2);
+        assert_eq!(config.creator, "test");
+        assert!(config.uses_hkdf());
+        assert!(config.uses_raw64());
+        assert!(config.uses_dir_iv());
+        assert!(config.uses_eme_names());
+    }
+
+    #[test]
+    fn test_load_unsupported_version() {
+        let dir = tempfile::tempdir().unwrap();
+        let conf_path = dir.path().join("gocryptfs.conf");
+        let json = make_config_json(1, &["GCMIV128"]);
+        fs::write(&conf_path, &json).unwrap();
+
+        let result = GocryptfsConfig::load(dir.path());
+        assert!(matches!(result, Err(ConfigError::UnsupportedVersion(1))));
+    }
+
+    #[test]
+    fn test_load_unsupported_flag() {
+        let dir = tempfile::tempdir().unwrap();
+        let conf_path = dir.path().join("gocryptfs.conf");
+        let json = make_config_json(2, &["GCMIV128", "UnknownFlag"]);
+        fs::write(&conf_path, &json).unwrap();
+
+        let result = GocryptfsConfig::load(dir.path());
+        assert!(matches!(result, Err(ConfigError::UnsupportedFlag(_))));
+    }
+
+    #[test]
+    fn test_load_missing_config() {
+        let dir = tempfile::tempdir().unwrap();
+        let result = GocryptfsConfig::load(dir.path());
+        assert!(matches!(result, Err(ConfigError::Io(_))));
+    }
+
+    #[test]
+    fn test_load_invalid_json() {
+        let dir = tempfile::tempdir().unwrap();
+        let conf_path = dir.path().join("gocryptfs.conf");
+        fs::write(&conf_path, "not valid json").unwrap();
+
+        let result = GocryptfsConfig::load(dir.path());
+        assert!(matches!(result, Err(ConfigError::Json(_))));
+    }
+
+    #[test]
+    fn test_load_from_external_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let conf_path = dir.path().join("my-custom-config.json");
+        let json = make_config_json(2, &["GCMIV128", "HKDF"]);
+        fs::write(&conf_path, &json).unwrap();
+
+        let config = GocryptfsConfig::load_from(&conf_path).unwrap();
+        assert_eq!(config.version, 2);
+        assert!(config.uses_hkdf());
+    }
+
+    #[test]
+    fn test_has_flag() {
+        let dir = tempfile::tempdir().unwrap();
+        let conf_path = dir.path().join("gocryptfs.conf");
+        let json = make_config_json(2, &["GCMIV128", "DirIV", "LongNames"]);
+        fs::write(&conf_path, &json).unwrap();
+
+        let config = GocryptfsConfig::load(dir.path()).unwrap();
+        assert!(config.has_flag("GCMIV128"));
+        assert!(config.has_flag("DirIV"));
+        assert!(config.has_flag("LongNames"));
+        assert!(!config.has_flag("HKDF"));
+        assert!(!config.has_flag("Raw64"));
+        assert!(!config.has_flag("EMENames"));
+    }
+
+    #[test]
+    fn test_flag_getters() {
+        let dir = tempfile::tempdir().unwrap();
+        let conf_path = dir.path().join("gocryptfs.conf");
+        let json = make_config_json(2, &["GCMIV128", "LongNames"]);
+        fs::write(&conf_path, &json).unwrap();
+
+        let config = GocryptfsConfig::load(dir.path()).unwrap();
+        assert!(config.uses_long_names());
+        assert!(!config.uses_hkdf());
+        assert!(!config.uses_raw64());
+        assert!(!config.uses_dir_iv());
+        assert!(!config.uses_eme_names());
+    }
+
+    #[test]
+    fn test_all_supported_flags() {
+        let dir = tempfile::tempdir().unwrap();
+        let conf_path = dir.path().join("gocryptfs.conf");
+        let json = make_config_json(
+            2,
+            &["GCMIV128", "DirIV", "EMENames", "LongNames", "HKDF", "Raw64"],
+        );
+        fs::write(&conf_path, &json).unwrap();
+
+        let config = GocryptfsConfig::load(dir.path()).unwrap();
+        assert!(config.uses_hkdf());
+        assert!(config.uses_raw64());
+        assert!(config.uses_dir_iv());
+        assert!(config.uses_eme_names());
+        assert!(config.uses_long_names());
+        assert!(config.has_flag("GCMIV128"));
+    }
+
+    #[test]
+    fn test_scrypt_params_parsed() {
+        let dir = tempfile::tempdir().unwrap();
+        let conf_path = dir.path().join("gocryptfs.conf");
+        let json = make_config_json(2, &["GCMIV128"]);
+        fs::write(&conf_path, &json).unwrap();
+
+        let config = GocryptfsConfig::load(dir.path()).unwrap();
+        assert_eq!(config.scrypt_object.n, 65536);
+        assert_eq!(config.scrypt_object.r, 8);
+        assert_eq!(config.scrypt_object.p, 1);
+        assert_eq!(config.scrypt_object.key_len, 32);
+    }
+
+    #[test]
+    fn test_config_clone() {
+        let dir = tempfile::tempdir().unwrap();
+        let conf_path = dir.path().join("gocryptfs.conf");
+        let json = make_config_json(2, &["GCMIV128", "HKDF"]);
+        fs::write(&conf_path, &json).unwrap();
+
+        let config = GocryptfsConfig::load(dir.path()).unwrap();
+        let cloned = config.clone();
+        assert_eq!(config.version, cloned.version);
+        assert_eq!(config.creator, cloned.creator);
+        assert_eq!(config.feature_flags, cloned.feature_flags);
+    }
+}

@@ -17,3 +17,22 @@ pub fn disable_core_dumps() -> bool {
 pub fn disable_core_dumps() -> bool {
     true
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_disable_core_dumps_succeeds() {
+        // Should succeed (or at least not panic)
+        let result = disable_core_dumps();
+        assert!(result);
+    }
+
+    #[test]
+    fn test_disable_core_dumps_idempotent() {
+        // Calling twice should still succeed
+        assert!(disable_core_dumps());
+        assert!(disable_core_dumps());
+    }
+}

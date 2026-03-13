@@ -1,7 +1,7 @@
 mod commands;
-mod crypto;
+pub mod crypto;
 mod security;
-mod vault;
+pub mod vault;
 
 use std::sync::Arc;
 use tauri::Manager;
@@ -36,6 +36,9 @@ fn mime_from_path(path: &str) -> &'static str {
 }
 
 fn parse_range(range_header: &str, total: usize) -> Option<(usize, usize)> {
+    if total == 0 {
+        return None;
+    }
     let range = range_header.strip_prefix("bytes=")?;
     let mut parts = range.splitn(2, '-');
     let start_str = parts.next()?;
@@ -135,6 +138,161 @@ fn serve_media(
         .header("Access-Control-Allow-Origin", "*")
         .body(data)
         .unwrap()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // --- mime_from_path tests ---
+
+    #[test]
+    fn test_mime_video_types() {
+        assert_eq!(mime_from_path("video.mp4"), "video/mp4");
+        assert_eq!(mime_from_path("video.m4v"), "video/mp4");
+        assert_eq!(mime_from_path("video.mov"), "video/quicktime");
+        assert_eq!(mime_from_path("video.webm"), "video/webm");
+        assert_eq!(mime_from_path("video.ogg"), "video/ogg");
+        assert_eq!(mime_from_path("video.ogv"), "video/ogg");
+        assert_eq!(mime_from_path("video.avi"), "video/x-msvideo");
+        assert_eq!(mime_from_path("video.mkv"), "video/x-matroska");
+        assert_eq!(mime_from_path("video.3gp"), "video/3gpp");
+        assert_eq!(mime_from_path("video.ts"), "video/mp2t");
+    }
+
+    #[test]
+    fn test_mime_audio_types() {
+        assert_eq!(mime_from_path("audio.mp3"), "audio/mpeg");
+        assert_eq!(mime_from_path("audio.wav"), "audio/wav");
+        assert_eq!(mime_from_path("audio.m4a"), "audio/mp4");
+        assert_eq!(mime_from_path("audio.aac"), "audio/mp4");
+        assert_eq!(mime_from_path("audio.flac"), "audio/flac");
+    }
+
+    #[test]
+    fn test_mime_image_types() {
+        assert_eq!(mime_from_path("image.png"), "image/png");
+        assert_eq!(mime_from_path("image.jpg"), "image/jpeg");
+        assert_eq!(mime_from_path("image.jpeg"), "image/jpeg");
+        assert_eq!(mime_from_path("image.gif"), "image/gif");
+        assert_eq!(mime_from_path("image.webp"), "image/webp");
+        assert_eq!(mime_from_path("image.svg"), "image/svg+xml");
+        assert_eq!(mime_from_path("image.bmp"), "image/bmp");
+        assert_eq!(mime_from_path("image.ico"), "image/x-icon");
+        assert_eq!(mime_from_path("image.avif"), "image/avif");
+    }
+
+    #[test]
+    fn test_mime_other_types() {
+        assert_eq!(mime_from_path("document.pdf"), "application/pdf");
+    }
+
+    #[test]
+    fn test_mime_unknown_extension() {
+        assert_eq!(mime_from_path("file.xyz"), "application/octet-stream");
+        assert_eq!(mime_from_path("file.bin"), "application/octet-stream");
+        assert_eq!(mime_from_path("noextension"), "application/octet-stream");
+    }
+
+    #[test]
+    fn test_mime_case_insensitive() {
+        assert_eq!(mime_from_path("VIDEO.MP4"), "video/mp4");
+        assert_eq!(mime_from_path("image.PNG"), "image/png");
+        assert_eq!(mime_from_path("audio.FLAC"), "audio/flac");
+    }
+
+    #[test]
+    fn test_mime_path_with_directories() {
+        assert_eq!(mime_from_path("path/to/video.mp4"), "video/mp4");
+        assert_eq!(mime_from_path("some/deep/path/image.jpg"), "image/jpeg");
+    }
+
+    #[test]
+    fn test_mime_dotfile() {
+        assert_eq!(mime_from_path(".hidden"), "application/octet-stream");
+    }
+
+    #[test]
+    fn test_mime_multiple_dots() {
+        assert_eq!(mime_from_path("archive.tar.gz"), "application/octet-stream"); // "gz" not recognized
+        assert_eq!(mime_from_path("photo.backup.jpg"), "image/jpeg");
+    }
+
+    // --- parse_range tests ---
+
+    #[test]
+    fn test_parse_range_full() {
+        assert_eq!(parse_range("bytes=0-99", 1000), Some((0, 99)));
+    }
+
+    #[test]
+    fn test_parse_range_open_end() {
+        assert_eq!(parse_range("bytes=500-", 1000), Some((500, 999)));
+    }
+
+    #[test]
+    fn test_parse_range_suffix() {
+        // Last 500 bytes of a 1000-byte file
+        assert_eq!(parse_range("bytes=-500", 1000), Some((500, 999)));
+    }
+
+    #[test]
+    fn test_parse_range_suffix_larger_than_file() {
+        // Request last 2000 bytes of 1000-byte file → entire file
+        assert_eq!(parse_range("bytes=-2000", 1000), Some((0, 999)));
+    }
+
+    #[test]
+    fn test_parse_range_single_byte() {
+        assert_eq!(parse_range("bytes=0-0", 1000), Some((0, 0)));
+    }
+
+    #[test]
+    fn test_parse_range_last_byte() {
+        assert_eq!(parse_range("bytes=999-999", 1000), Some((999, 999)));
+    }
+
+    #[test]
+    fn test_parse_range_end_beyond_file() {
+        // End exceeds file size → clamped to total-1
+        assert_eq!(parse_range("bytes=0-5000", 1000), Some((0, 999)));
+    }
+
+    #[test]
+    fn test_parse_range_start_at_total() {
+        // Start at file size → invalid
+        assert_eq!(parse_range("bytes=1000-1000", 1000), None);
+    }
+
+    #[test]
+    fn test_parse_range_start_after_end() {
+        assert_eq!(parse_range("bytes=500-100", 1000), None);
+    }
+
+    #[test]
+    fn test_parse_range_invalid_format() {
+        assert_eq!(parse_range("invalid", 1000), None);
+        assert_eq!(parse_range("bytes=abc-def", 1000), None);
+        assert_eq!(parse_range("", 1000), None);
+    }
+
+    #[test]
+    fn test_parse_range_no_prefix() {
+        assert_eq!(parse_range("0-99", 1000), None);
+    }
+
+    #[test]
+    fn test_parse_range_zero_length_file() {
+        // All ranges on zero-length files should return None
+        assert_eq!(parse_range("bytes=0-", 0), None);
+        assert_eq!(parse_range("bytes=-0", 0), None);
+        assert_eq!(parse_range("bytes=0-0", 0), None);
+    }
+
+    #[test]
+    fn test_parse_range_middle_of_file() {
+        assert_eq!(parse_range("bytes=100-199", 1000), Some((100, 199)));
+    }
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]

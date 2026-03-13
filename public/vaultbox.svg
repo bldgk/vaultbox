@@ -1,0 +1,47 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#1a1a2e"/>
+      <stop offset="100%" style="stop-color:#16213e"/>
+    </linearGradient>
+    <linearGradient id="shield" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#4fc3f7"/>
+      <stop offset="100%" style="stop-color:#0288d1"/>
+    </linearGradient>
+    <linearGradient id="lock" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:#fff"/>
+      <stop offset="100%" style="stop-color:#e0e0e0"/>
+    </linearGradient>
+    <filter id="glow">
+      <feGaussianBlur stdDeviation="4" result="blur"/>
+      <feComposite in="SourceGraphic" in2="blur" operator="over"/>
+    </filter>
+  </defs>
+
+  <!-- Rounded square background -->
+  <rect x="16" y="16" width="480" height="480" rx="96" ry="96" fill="url(#bg)"/>
+
+  <!-- Outer glow ring -->
+  <rect x="32" y="32" width="448" height="448" rx="80" ry="80" fill="none" stroke="#4fc3f7" stroke-width="3" opacity="0.3"/>
+
+  <!-- Shield / vault door shape -->
+  <path d="M256 72 C160 72 96 120 96 180 L96 320 C96 400 256 456 256 456 C256 456 416 400 416 320 L416 180 C416 120 352 72 256 72Z"
+        fill="url(#shield)" opacity="0.15" filter="url(#glow)"/>
+  <path d="M256 88 C168 88 112 130 112 184 L112 316 C112 388 256 440 256 440 C256 440 400 388 400 316 L400 184 C400 130 344 88 256 88Z"
+        fill="none" stroke="url(#shield)" stroke-width="6" stroke-linejoin="round"/>
+
+  <!-- Box outline inside shield -->
+  <rect x="176" y="184" width="160" height="120" rx="12" ry="12"
+        fill="none" stroke="url(#shield)" stroke-width="5"/>
+  <!-- Box lid line -->
+  <line x1="176" y1="216" x2="336" y2="216" stroke="url(#shield)" stroke-width="5"/>
+
+  <!-- Lock body -->
+  <rect x="232" y="228" width="48" height="44" rx="6" ry="6" fill="url(#lock)"/>
+  <!-- Lock shackle -->
+  <path d="M240 228 L240 212 C240 198 272 198 272 212 L272 228"
+        fill="none" stroke="url(#lock)" stroke-width="6" stroke-linecap="round"/>
+  <!-- Keyhole -->
+  <circle cx="256" cy="248" r="6" fill="#1a1a2e"/>
+  <rect x="253" y="250" width="6" height="12" rx="2" fill="#1a1a2e"/>
+</svg>

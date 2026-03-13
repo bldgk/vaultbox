@@ -1,0 +1,47 @@
+[package]
+name = "vaultbox"
+version = "0.1.0"
+description = "VaultBox - gocryptfs vault browser"
+authors = ["you"]
+edition = "2021"
+
+[lib]
+name = "vaultbox_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-opener = "2"
+tauri-plugin-dialog = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Crypto
+aes = "0.8"
+aes-gcm = "0.10"
+scrypt = "0.11"
+hkdf = "0.12"
+sha2 = "0.10"
+cipher = "0.4"
+
+# Memory safety
+zeroize = { version = "1", features = ["derive"] }
+secrecy = { version = "0.10", features = ["serde"] }
+
+# Utilities
+base64 = "0.22"
+data-encoding = "2"
+rand = "0.9"
+thiserror = "2"
+anyhow = "1"
+log = "0.4"
+env_logger = "0.11"
+parking_lot = "0.12"
+libc = "0.2"
+chrono = { version = "0.4", features = ["serde"] }
+tokio = { version = "1", features = ["full"] }
+lru = "0.14"
+urlencoding = "2"

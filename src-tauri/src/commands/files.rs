@@ -1,0 +1,344 @@
+use std::sync::Arc;
+
+use serde::Serialize;
+use tauri::State;
+
+use crate::vault::ops::{self, FileEntry};
+use crate::vault::state::{VaultState, VaultStatus};
+
+#[derive(Debug, Serialize)]
+#[serde(tag = "type", content = "data")]
+pub enum FileContent {
+    Text(String),
+    Binary(String), // base64 encoded
+}
+
+fn ensure_unlocked(state: &VaultState) -> Result<(), String> {
+    if state.status() != VaultStatus::Unlocked {
+        return Err("Vault is locked".to_string());
+    }
+    Ok(())
+}
+
+fn use_raw64(state: &VaultState) -> bool {
+    state
+        .config()
+        .map(|c| c.uses_raw64())
+        .unwrap_or(true)
+}
+
+#[tauri::command]
+pub async fn list_dir(
+    path: String,
+    state: State<'_, Arc<VaultState>>,
+) -> Result<Vec<FileEntry>, String> {
+    ensure_unlocked(&state)?;
+    state.touch();
+
+    let vault_path = state.vault_path().ok_or("No vault path")?;
+    let raw64 = use_raw64(&state);
+
+    let filename_key = state
+        .with_filename_key(|k| *k)
+        .ok_or("No filename key")?;
+    let content_key = state
+        .with_content_key(|k| *k)
+        .ok_or("No content key")?;
+
+    ops::list_directory(&vault_path, &path, &filename_key, &content_key, raw64)
+        .map_err(|e| format!("Failed to list directory: {}", e))
+}
+
+#[tauri::command]
+pub async fn read_file(
+    path: String,
+    state: State<'_, Arc<VaultState>>,
+) -> Result<FileContent, String> {
+    ensure_unlocked(&state)?;
+    state.touch();
+
+    let vault_path = state.vault_path().ok_or("No vault path")?;
+    let raw64 = use_raw64(&state);
+
+    let filename_key = state
+        .with_filename_key(|k| *k)
+        .ok_or("No filename key")?;
+    let content_key = state
+        .with_content_key(|k| *k)
+        .ok_or("No content key")?;
+
+    let data = ops::read_file(&vault_path, &path, &filename_key, &content_key, raw64)
+        .map_err(|e| format!("Failed to read file: {}", e))?;
+
+    // Try to interpret as UTF-8 text
+    match String::from_utf8(data.clone()) {
+        Ok(text) => Ok(FileContent::Text(text)),
+        Err(_) => {
+            use base64::engine::general_purpose::STANDARD;
+            use base64::Engine;
+            Ok(FileContent::Binary(STANDARD.encode(&data)))
+        }
+    }
+}
+
+#[tauri::command]
+pub async fn write_file(
+    path: String,
+    content: Vec<u8>,
+    state: State<'_, Arc<VaultState>>,
+) -> Result<(), String> {
+    ensure_unlocked(&state)?;
+    state.touch();
+
+    let vault_path = state.vault_path().ok_or("No vault path")?;
+    let raw64 = use_raw64(&state);
+
+    let filename_key = state
+        .with_filename_key(|k| *k)
+        .ok_or("No filename key")?;
+    let content_key = state
+        .with_content_key(|k| *k)
+        .ok_or("No content key")?;
+
+    ops::write_file(
+        &vault_path,
+        &path,
+        &content,
+        &filename_key,
+        &content_key,
+        raw64,
+    )
+    .map_err(|e| format!("Failed to write file: {}", e))
+}
+
+#[tauri::command]
+pub async fn create_file(
+    dir: String,
+    name: String,
+    state: State<'_, Arc<VaultState>>,
+) -> Result<(), String> {
+    ensure_unlocked(&state)?;
+    state.touch();
+
+    let vault_path = state.vault_path().ok_or("No vault path")?;
+    let raw64 = use_raw64(&state);
+
+    let filename_key = state
+        .with_filename_key(|k| *k)
+        .ok_or("No filename key")?;
+    let content_key = state
+        .with_content_key(|k| *k)
+        .ok_or("No content key")?;
+
+    ops::create_file(&vault_path, &dir, &name, &filename_key, &content_key, raw64)
+        .map_err(|e| format!("Failed to create file: {}", e))
+}
+
+#[tauri::command]
+pub async fn create_dir(
+    parent: String,
+    name: String,
+    state: State<'_, Arc<VaultState>>,
+) -> Result<(), String> {
+    ensure_unlocked(&state)?;
+    state.touch();
+
+    let vault_path = state.vault_path().ok_or("No vault path")?;
+    let raw64 = use_raw64(&state);
+
+    let filename_key = state
+        .with_filename_key(|k| *k)
+        .ok_or("No filename key")?;
+
+    ops::create_directory(&vault_path, &parent, &name, &filename_key, raw64)
+        .map_err(|e| format!("Failed to create directory: {}", e))
+}
+
+#[tauri::command]
+pub async fn rename_entry(
+    old_path: String,
+    new_name: String,
+    state: State<'_, Arc<VaultState>>,
+) -> Result<(), String> {
+    ensure_unlocked(&state)?;
+    state.touch();
+
+    let vault_path = state.vault_path().ok_or("No vault path")?;
+    let raw64 = use_raw64(&state);
+
+    let filename_key = state
+        .with_filename_key(|k| *k)
+        .ok_or("No filename key")?;
+
+    ops::rename_entry(&vault_path, &old_path, &new_name, &filename_key, raw64)
+        .map_err(|e| format!("Failed to rename: {}", e))
+}
+
+#[tauri::command]
+pub async fn delete_entry(
+    path: String,
+    _permanent: bool,
+    state: State<'_, Arc<VaultState>>,
+) -> Result<(), String> {
+    ensure_unlocked(&state)?;
+    state.touch();
+
+    let vault_path = state.vault_path().ok_or("No vault path")?;
+    let raw64 = use_raw64(&state);
+
+    let filename_key = state
+        .with_filename_key(|k| *k)
+        .ok_or("No filename key")?;
+
+    ops::delete_entry(&vault_path, &path, &filename_key, raw64)
+        .map_err(|e| format!("Failed to delete: {}", e))
+}
+
+#[tauri::command]
+pub async fn copy_entry(
+    source_path: String,
+    dest_dir: String,
+    dest_name: String,
+    state: State<'_, Arc<VaultState>>,
+) -> Result<(), String> {
+    ensure_unlocked(&state)?;
+    state.touch();
+
+    let vault_path = state.vault_path().ok_or("No vault path")?;
+    let raw64 = use_raw64(&state);
+
+    let filename_key = state
+        .with_filename_key(|k| *k)
+        .ok_or("No filename key")?;
+    let content_key = state
+        .with_content_key(|k| *k)
+        .ok_or("No content key")?;
+
+    ops::copy_entry(
+        &vault_path,
+        &source_path,
+        &dest_dir,
+        &dest_name,
+        &filename_key,
+        &content_key,
+        raw64,
+    )
+    .map_err(|e| format!("Failed to copy: {}", e))
+}
+
+#[tauri::command]
+pub async fn search_files(
+    query: String,
+    state: State<'_, Arc<VaultState>>,
+) -> Result<Vec<FileEntry>, String> {
+    ensure_unlocked(&state)?;
+    state.touch();
+
+    let vault_path = state.vault_path().ok_or("No vault path")?;
+    let raw64 = use_raw64(&state);
+
+    let filename_key = state
+        .with_filename_key(|k| *k)
+        .ok_or("No filename key")?;
+    let content_key = state
+        .with_content_key(|k| *k)
+        .ok_or("No content key")?;
+
+    ops::search_files(&vault_path, &query, &filename_key, &content_key, raw64)
+        .map_err(|e| format!("Failed to search: {}", e))
+}
+
+#[tauri::command]
+pub async fn import_files(
+    external_paths: Vec<String>,
+    vault_dir: String,
+    state: State<'_, Arc<VaultState>>,
+) -> Result<(), String> {
+    ensure_unlocked(&state)?;
+    state.touch();
+
+    let vault_path = state.vault_path().ok_or("No vault path")?;
+    let raw64 = use_raw64(&state);
+
+    let filename_key = state
+        .with_filename_key(|k| *k)
+        .ok_or("No filename key")?;
+    let content_key = state
+        .with_content_key(|k| *k)
+        .ok_or("No content key")?;
+
+    for ext_path in &external_paths {
+        let source = std::path::Path::new(ext_path);
+        let file_name = source
+            .file_name()
+            .ok_or("Invalid filename")?
+            .to_string_lossy()
+            .to_string();
+
+        let data = std::fs::read(source)
+            .map_err(|e| format!("Failed to read source file: {}", e))?;
+
+        ops::create_file(
+            &vault_path,
+            &vault_dir,
+            &file_name,
+            &filename_key,
+            &content_key,
+            raw64,
+        )
+        .map_err(|e| format!("Failed to create file in vault: {}", e))?;
+
+        // Now write the actual content
+        let file_path = if vault_dir.is_empty() {
+            file_name
+        } else {
+            format!("{}/{}", vault_dir, file_name)
+        };
+
+        ops::write_file(
+            &vault_path,
+            &file_path,
+            &data,
+            &filename_key,
+            &content_key,
+            raw64,
+        )
+        .map_err(|e| format!("Failed to write imported file: {}", e))?;
+    }
+
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn export_file(
+    vault_path_str: String,
+    external_dest: String,
+    state: State<'_, Arc<VaultState>>,
+) -> Result<(), String> {
+    ensure_unlocked(&state)?;
+    state.touch();
+
+    let vault_path = state.vault_path().ok_or("No vault path")?;
+    let raw64 = use_raw64(&state);
+
+    let filename_key = state
+        .with_filename_key(|k| *k)
+        .ok_or("No filename key")?;
+    let content_key = state
+        .with_content_key(|k| *k)
+        .ok_or("No content key")?;
+
+    let data = ops::read_file(
+        &vault_path,
+        &vault_path_str,
+        &filename_key,
+        &content_key,
+        raw64,
+    )
+    .map_err(|e| format!("Failed to read file: {}", e))?;
+
+    std::fs::write(&external_dest, &data)
+        .map_err(|e| format!("Failed to write exported file: {}", e))?;
+
+    Ok(())
+}

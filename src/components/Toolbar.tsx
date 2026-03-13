@@ -58,8 +58,8 @@ export function Toolbar() {
     try {
       const results = await searchFiles(searchQuery);
       setSearchResults(results);
-    } catch (err) {
-      console.error(err);
+    } catch {
+      // Search failed
     }
   };
 

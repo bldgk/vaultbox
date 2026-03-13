@@ -8,7 +8,9 @@ const PREVIEWABLE_TYPES = new Set(["image", "media"]);
 function getImageSrc(fileName: string, content: { type: string; data: string }): string | null {
   const ext = fileName.split(".").pop()?.toLowerCase() ?? "";
   if (content.type === "Text" && fileName.endsWith(".svg")) {
-    return `data:image/svg+xml;base64,${btoa(content.data)}`;
+    // Use blob URL instead of data URI to prevent SVG script execution
+    const blob = new Blob([content.data], { type: "image/svg+xml" });
+    return URL.createObjectURL(blob);
   }
   if (content.type !== "Binary") return null;
   const mimeMap: Record<string, string> = {
@@ -17,7 +19,11 @@ function getImageSrc(fileName: string, content: { type: string; data: string }):
     avif: "image/avif",
   };
   const mime = mimeMap[ext] ?? "image/png";
-  return `data:${mime};base64,${content.data}`;
+  const raw = atob(content.data);
+  const bytes = new Uint8Array(raw.length);
+  for (let i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i);
+  const blob = new Blob([bytes], { type: mime });
+  return URL.createObjectURL(blob);
 }
 
 function getMediaUrl(filePath: string): string {
@@ -55,8 +61,8 @@ export function FullscreenViewer() {
       setZoom(1);
       setPan({ x: 0, y: 0 });
       setFullscreenPreview({ filePath: file.path, fileName: file.name, content });
-    } catch (err) {
-      console.error("Failed to load preview:", err);
+    } catch {
+      // Failed to load preview — silently ignore
     }
   }, [previewableFiles, setFullscreenPreview]);
 
@@ -67,6 +73,29 @@ export function FullscreenViewer() {
   const goPrev = useCallback(() => {
     if (currentIndex > 0) navigateToFile(currentIndex - 1);
   }, [currentIndex, navigateToFile]);
+
+  // Derive viewer type and sources (must be before early return so hooks are stable)
+  const viewerType = fullscreenPreview ? getViewerType(fullscreenPreview.fileName) : null;
+  const isImage = viewerType === "image";
+  const isVideo = viewerType === "media";
+
+  // Images use blob URLs, videos use streaming protocol
+  const imgSrc = useMemo(() => {
+    if (!fullscreenPreview || !isImage) return null;
+    return getImageSrc(fullscreenPreview.fileName, fullscreenPreview.content);
+  }, [fullscreenPreview, isImage]);
+
+  const videoSrc = useMemo(() => {
+    if (!fullscreenPreview || !isVideo) return null;
+    return getMediaUrl(fullscreenPreview.filePath);
+  }, [fullscreenPreview, isVideo]);
+
+  // Revoke blob URL on change/unmount
+  useEffect(() => {
+    return () => {
+      if (imgSrc && imgSrc.startsWith("blob:")) URL.revokeObjectURL(imgSrc);
+    };
+  }, [imgSrc]);
 
   // Keyboard handler
   useEffect(() => {
@@ -122,14 +151,6 @@ export function FullscreenViewer() {
   const handleMouseUp = useCallback(() => setIsDragging(false), []);
 
   if (!fullscreenPreview) return null;
-
-  const viewerType = getViewerType(fullscreenPreview.fileName);
-  const isImage = viewerType === "image";
-  const isVideo = viewerType === "media";
-
-  // Images use data URI (small files), videos use streaming protocol
-  const imgSrc = isImage ? getImageSrc(fullscreenPreview.fileName, fullscreenPreview.content) : null;
-  const videoSrc = isVideo ? getMediaUrl(fullscreenPreview.filePath) : null;
 
   const hasPrev = currentIndex > 0;
   const hasNext = currentIndex < previewableFiles.length - 1;

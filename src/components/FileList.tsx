@@ -24,8 +24,8 @@ export function FileList() {
     try {
       const items = await listDir(currentPath);
       setEntries(items);
-    } catch (err) {
-      console.error("Failed to list directory:", err);
+    } catch {
+      // Failed to list directory
     } finally {
       setLoading(false);
     }

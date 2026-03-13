@@ -114,6 +114,9 @@ export const useFileStore = create<FileStore>((set) => ({
 
   closeTab: (index) =>
     set((state) => {
+      // Null out the content of the closed tab to release decrypted data
+      const closedTab = state.openTabs[index];
+      if (closedTab) closedTab.content = null;
       const tabs = state.openTabs.filter((_, i) => i !== index);
       let activeIndex = state.activeTabIndex;
       if (activeIndex >= tabs.length) activeIndex = tabs.length - 1;

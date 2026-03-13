@@ -1,12 +1,47 @@
-import { useState } from "react";
+import { useState, useRef, useCallback } from "react";
 import { useVaultStore } from "../../store/vaultStore";
 import { openVault, createVault } from "../../hooks/useTauriCommands";
 import { open } from "@tauri-apps/plugin-dialog";
 
+/**
+ * Collect password characters into a mutable Uint8Array that can be zeroed,
+ * rather than an immutable JavaScript string that lingers in GC memory.
+ */
+function useSecurePassword() {
+  // We still need a string for the controlled <input> display,
+  // but we keep the real bytes in a Uint8Array that we zero after use.
+  const bufferRef = useRef<number[]>([]);
+  const [displayLength, setDisplayLength] = useState(0);
+
+  const handleChange = useCallback((value: string) => {
+    // Encode the new value into our mutable buffer
+    const encoded = new TextEncoder().encode(value);
+    bufferRef.current = Array.from(encoded);
+    setDisplayLength(value.length);
+  }, []);
+
+  const consume = useCallback((): Uint8Array => {
+    // Return the password bytes and zero the buffer
+    const bytes = new Uint8Array(bufferRef.current);
+    bufferRef.current.fill(0);
+    bufferRef.current = [];
+    setDisplayLength(0);
+    return bytes;
+  }, []);
+
+  const clear = useCallback(() => {
+    bufferRef.current.fill(0);
+    bufferRef.current = [];
+    setDisplayLength(0);
+  }, []);
+
+  return { displayLength, handleChange, consume, clear, hasValue: displayLength > 0 };
+}
+
 export function UnlockDialog() {
   const [mode, setMode] = useState<"open" | "create">("open");
   const [path, setPath] = useState("");
-  const [password, setPassword] = useState("");
+  const securePassword = useSecurePassword();
   const [configPath, setConfigPath] = useState("");
   const [useExternalConfig, setUseExternalConfig] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -31,19 +66,26 @@ export function UnlockDialog() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!path || !password) return;
+    if (!path || !securePassword.hasValue) return;
 
     setLoading(true);
     setError(null);
 
+    // consume() returns the Uint8Array and zeros the internal buffer.
+    // openVault/createVault will zero the Uint8Array after sending over IPC.
+    const passwordBytes = securePassword.consume();
+
     try {
       const externalConf = useExternalConfig && configPath ? configPath : undefined;
       const info = mode === "open"
-        ? await openVault(path, password, externalConf)
-        : await createVault(path, password);
+        ? await openVault(path, passwordBytes, externalConf)
+        : await createVault(path, passwordBytes);
       addRecentVault(path);
       setUnlocked(info);
     } catch (err) {
+      // Ensure bytes are zeroed even on error (consume already zeroed the buffer,
+      // and the IPC layer zeros its copy, but belt-and-suspenders)
+      passwordBytes.fill(0);
       setError(String(err));
     } finally {
       setLoading(false);
@@ -110,8 +152,7 @@ export function UnlockDialog() {
             <label className="block text-sm text-gray-400 mb-1">Password</label>
             <input
               type="password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
+              onChange={(e) => securePassword.handleChange(e.target.value)}
               placeholder="Enter vault password"
               className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-white text-sm placeholder-gray-500 focus:outline-none focus:border-indigo-500"
             />
@@ -160,7 +201,7 @@ export function UnlockDialog() {
 
           <button
             type="submit"
-            disabled={loading || !path || !password}
+            disabled={loading || !path || !securePassword.hasValue}
             className="w-full py-2.5 bg-indigo-600 text-white rounded-lg font-medium text-sm hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed transition"
           >
             {loading ? "Processing..." : mode === "open" ? "Unlock Vault" : "Create Vault"}

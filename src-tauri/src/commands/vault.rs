@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 use serde::Serialize;
 use tauri::State;
+use zeroize::Zeroize;
 
 use crate::crypto::config::GocryptfsConfig;
 use crate::crypto::kdf;
@@ -24,7 +25,7 @@ pub struct VaultStatusResponse {
 #[tauri::command]
 pub async fn open_vault(
     path: String,
-    password: String,
+    mut password: Vec<u8>,
     config_path: Option<String>,
     state: State<'_, Arc<VaultState>>,
 ) -> Result<VaultInfo, String> {
@@ -37,8 +38,15 @@ pub async fn open_vault(
             .map_err(|e| format!("Failed to load config: {}", e))?,
     };
 
-    let master_key = kdf::derive_master_key(&password, &config)
-        .map_err(|e| format!("Failed to derive key: {}", e))?;
+    // Convert bytes to string for scrypt, then zeroize both copies
+    let mut password_str = String::from_utf8(password.clone())
+        .map_err(|_| "Invalid password encoding".to_string())?;
+    password.zeroize();
+
+    let result = kdf::derive_master_key(&password_str, &config)
+        .map_err(|e| format!("Failed to derive key: {}", e));
+    password_str.zeroize();
+    let master_key = result?;
 
     // Derive sub-keys
     let content_key = if config.uses_hkdf() {
@@ -69,7 +77,7 @@ pub async fn open_vault(
 #[tauri::command]
 pub async fn create_vault(
     path: String,
-    password: String,
+    mut password: Vec<u8>,
     state: State<'_, Arc<VaultState>>,
 ) -> Result<VaultInfo, String> {
     use aes_gcm::{
@@ -103,12 +111,15 @@ pub async fn create_vault(
 
     let mut wrapping_key = Zeroizing::new([0u8; 32]);
     scrypt::scrypt(
-        password.as_bytes(),
+        &password,
         &salt,
         &scrypt_params,
         wrapping_key.as_mut(),
     )
     .map_err(|e| format!("scrypt error: {}", e))?;
+
+    // Zeroize password bytes immediately after scrypt
+    password.zeroize();
 
     // Encrypt master key with wrapping key
     let cipher = Aes256Gcm::new_from_slice(wrapping_key.as_ref())

@@ -26,12 +26,15 @@ export const useVaultStore = create<VaultStore>((set) => ({
       error: null,
     })),
 
-  setLocked: () =>
-    set(() => ({
+  setLocked: () => {
+    localStorage.removeItem("recentVaults");
+    return set(() => ({
       status: "locked",
       vaultInfo: null,
       error: null,
-    })),
+      recentVaults: [],
+    }));
+  },
 
   setError: (error) => set({ error }),
 

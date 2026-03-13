@@ -23,12 +23,27 @@ export type FileContent =
   | { type: "Text"; data: string }
   | { type: "Binary"; data: string };
 
-export async function openVault(path: string, password: string, configPath?: string): Promise<VaultInfo> {
-  return invoke<VaultInfo>("open_vault", { path, password, configPath: configPath ?? null });
+export async function openVault(path: string, password: Uint8Array, configPath?: string): Promise<VaultInfo> {
+  // Send password as byte array so it can be zeroed after the call.
+  // JavaScript strings are immutable and cannot be wiped from memory;
+  // Uint8Array can be filled with zeros immediately after use.
+  const passwordBytes = Array.from(password);
+  password.fill(0);
+  try {
+    return await invoke<VaultInfo>("open_vault", { path, password: passwordBytes, configPath: configPath ?? null });
+  } finally {
+    passwordBytes.fill(0);
+  }
 }
 
-export async function createVault(path: string, password: string): Promise<VaultInfo> {
-  return invoke<VaultInfo>("create_vault", { path, password });
+export async function createVault(path: string, password: Uint8Array): Promise<VaultInfo> {
+  const passwordBytes = Array.from(password);
+  password.fill(0);
+  try {
+    return await invoke<VaultInfo>("create_vault", { path, password: passwordBytes });
+  } finally {
+    passwordBytes.fill(0);
+  }
 }
 
 export async function lockVault(): Promise<void> {

@@ -305,7 +305,6 @@ pub fn run() {
     let vault_state = Arc::new(VaultState::new());
 
     tauri::Builder::default()
-        .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .manage(vault_state)
         .register_asynchronous_uri_scheme_protocol("vaultmedia", |ctx, request, responder| {

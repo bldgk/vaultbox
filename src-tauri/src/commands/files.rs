@@ -1,3 +1,4 @@
+use std::path::Path;
 use std::sync::Arc;
 
 use serde::Serialize;
@@ -6,6 +7,57 @@ use zeroize::Zeroizing;
 
 use crate::vault::ops::{self, FileEntry};
 use crate::vault::state::{VaultState, VaultStatus};
+
+/// Reject paths that point to sensitive system locations.
+/// Import/export should only access user-chosen files, not system internals.
+fn validate_external_path(path: &Path) -> Result<(), String> {
+    if !path.is_absolute() {
+        return Err("Path must be absolute".to_string());
+    }
+
+    let path_str = path.to_string_lossy();
+
+    // Block sensitive system directories
+    #[cfg(unix)]
+    {
+        const BLOCKED: &[&str] = &[
+            "/etc", "/var", "/private/etc", "/private/var",
+            "/System", "/Library",
+            "/usr", "/bin", "/sbin", "/dev", "/proc", "/sys",
+        ];
+        for blocked in BLOCKED {
+            if path_str.starts_with(blocked) {
+                return Err(format!("Access to {} is not allowed", blocked));
+            }
+        }
+    }
+
+    #[cfg(windows)]
+    {
+        let lower = path_str.to_lowercase();
+        const BLOCKED: &[&str] = &[
+            "c:\\windows", "c:\\program files", "c:\\program files (x86)",
+            "c:\\programdata", "c:\\$recycle.bin",
+        ];
+        for blocked in BLOCKED {
+            if lower.starts_with(blocked) {
+                return Err(format!("Access to {} is not allowed", blocked));
+            }
+        }
+    }
+
+    // Block hidden/dot directories (e.g. .ssh, .gnupg, .aws, .config)
+    for component in path.components() {
+        if let std::path::Component::Normal(name) = component {
+            let name_str = name.to_string_lossy();
+            if name_str.starts_with('.') && name_str.len() > 1 {
+                return Err(format!("Access to hidden path '{}' is not allowed", name_str));
+            }
+        }
+    }
+
+    Ok(())
+}
 
 #[derive(Debug, Serialize)]
 #[serde(tag = "type", content = "data")]
@@ -274,10 +326,7 @@ pub async fn import_files(
 
     for ext_path in &external_paths {
         let source = std::path::Path::new(ext_path);
-        // Validate path is absolute and doesn't traverse to sensitive locations
-        if !source.is_absolute() {
-            return Err("Import paths must be absolute".to_string());
-        }
+        validate_external_path(source)?;
         let file_name = source
             .file_name()
             .ok_or("Invalid filename")?
@@ -327,11 +376,8 @@ pub async fn export_file(
     ensure_unlocked(&state)?;
     state.touch();
 
-    // Validate export path is absolute
     let dest_path = std::path::Path::new(&external_dest);
-    if !dest_path.is_absolute() {
-        return Err("Export path must be absolute".to_string());
-    }
+    validate_external_path(dest_path)?;
 
     let vault_path = state.vault_path().ok_or("No vault path")?;
     let raw64 = use_raw64(&state);

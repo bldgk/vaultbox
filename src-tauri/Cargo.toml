@@ -45,6 +45,7 @@ chrono = { version = "0.4", features = ["serde"] }
 tokio = { version = "1", features = ["full"] }
 lru = "0.14"
 urlencoding = "2"
+arboard = "3"
 
 [dev-dependencies]
 tempfile = "3"

@@ -61,7 +61,7 @@ fn test_write_and_read_file() {
     ops::write_file(vault.path(), "data.txt", b"hello encrypted world", &fk, &ck, true).unwrap();
 
     let data = ops::read_file(vault.path(), "data.txt", &fk, &ck, true).unwrap();
-    assert_eq!(data, b"hello encrypted world");
+    assert_eq!(data.as_slice(), b"hello encrypted world");
 }
 
 #[test]
@@ -73,7 +73,7 @@ fn test_write_read_binary_data() {
     ops::write_file(vault.path(), "binary.bin", &binary_data, &fk, &ck, true).unwrap();
 
     let data = ops::read_file(vault.path(), "binary.bin", &fk, &ck, true).unwrap();
-    assert_eq!(data, binary_data);
+    assert_eq!(*data, binary_data);
 }
 
 #[test]
@@ -85,7 +85,7 @@ fn test_write_overwrite_file() {
     ops::write_file(vault.path(), "test.txt", b"version 2", &fk, &ck, true).unwrap();
 
     let data = ops::read_file(vault.path(), "test.txt", &fk, &ck, true).unwrap();
-    assert_eq!(data, b"version 2");
+    assert_eq!(data.as_slice(), b"version 2");
 }
 
 #[test]
@@ -138,7 +138,7 @@ fn test_nested_directory_operations() {
 
     // Read it back
     let data = ops::read_file(vault.path(), "parent/child/deep.txt", &fk, &ck, true).unwrap();
-    assert_eq!(data, b"deep content");
+    assert_eq!(data.as_slice(), b"deep content");
 
     // List nested dir
     let entries = ops::list_directory(vault.path(), "parent/child", &fk, &ck, true).unwrap();
@@ -161,7 +161,7 @@ fn test_rename_file() {
 
     // Content should still be readable under new name
     let data = ops::read_file(vault.path(), "new.txt", &fk, &ck, true).unwrap();
-    assert_eq!(data, b"content");
+    assert_eq!(data.as_slice(), b"content");
 }
 
 #[test]
@@ -208,8 +208,8 @@ fn test_copy_file() {
     // Both should have same content
     let orig = ops::read_file(vault.path(), "original.txt", &fk, &ck, true).unwrap();
     let copied = ops::read_file(vault.path(), "copied.txt", &fk, &ck, true).unwrap();
-    assert_eq!(orig, copied);
-    assert_eq!(orig, b"copy me");
+    assert_eq!(*orig, *copied);
+    assert_eq!(orig.as_slice(), b"copy me");
 }
 
 #[test]
@@ -223,7 +223,7 @@ fn test_copy_file_to_subdirectory() {
     ops::copy_entry(vault.path(), "source.txt", "dest", "source.txt", &fk, &ck, true).unwrap();
 
     let data = ops::read_file(vault.path(), "dest/source.txt", &fk, &ck, true).unwrap();
-    assert_eq!(data, b"file data");
+    assert_eq!(data.as_slice(), b"file data");
 }
 
 #[test]
@@ -245,9 +245,9 @@ fn test_copy_directory_recursive() {
     assert_eq!(entries.len(), 2);
 
     let data1 = ops::read_file(vault.path(), "dst-dir/file1.txt", &fk, &ck, true).unwrap();
-    assert_eq!(data1, b"content1");
+    assert_eq!(data1.as_slice(), b"content1");
     let data2 = ops::read_file(vault.path(), "dst-dir/file2.txt", &fk, &ck, true).unwrap();
-    assert_eq!(data2, b"content2");
+    assert_eq!(data2.as_slice(), b"content2");
 }
 
 #[test]
@@ -322,7 +322,7 @@ fn test_large_file_roundtrip() {
     ops::write_file(vault.path(), "large.bin", &large_data, &fk, &ck, true).unwrap();
 
     let read_back = ops::read_file(vault.path(), "large.bin", &fk, &ck, true).unwrap();
-    assert_eq!(read_back, large_data);
+    assert_eq!(*read_back, large_data);
 }
 
 #[test]

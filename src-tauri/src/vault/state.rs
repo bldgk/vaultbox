@@ -117,12 +117,12 @@ impl VaultState {
 
     pub fn with_content_key<R>(&self, f: impl FnOnce(&[u8; 32]) -> R) -> Option<R> {
         let inner = self.inner.read();
-        inner.content_key.as_ref().map(|k| f(k))
+        inner.content_key.as_ref().map(|k| k.use_key(f))
     }
 
     pub fn with_filename_key<R>(&self, f: impl FnOnce(&[u8; 32]) -> R) -> Option<R> {
         let inner = self.inner.read();
-        inner.filename_key.as_ref().map(|k| f(k))
+        inner.filename_key.as_ref().map(|k| k.use_key(f))
     }
 
     pub fn set_auto_lock_seconds(&self, seconds: u64) {

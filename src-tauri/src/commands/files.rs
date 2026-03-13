@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use serde::Serialize;
 use tauri::State;
+use zeroize::Zeroizing;
 
 use crate::vault::ops::{self, FileEntry};
 use crate::vault::state::{VaultState, VaultStatus};
@@ -39,10 +40,10 @@ pub async fn list_dir(
     let raw64 = use_raw64(&state);
 
     let filename_key = state
-        .with_filename_key(|k| *k)
+        .with_filename_key(|k| Zeroizing::new(*k))
         .ok_or("No filename key")?;
     let content_key = state
-        .with_content_key(|k| *k)
+        .with_content_key(|k| Zeroizing::new(*k))
         .ok_or("No content key")?;
 
     ops::list_directory(&vault_path, &path, &filename_key, &content_key, raw64)
@@ -61,22 +62,26 @@ pub async fn read_file(
     let raw64 = use_raw64(&state);
 
     let filename_key = state
-        .with_filename_key(|k| *k)
+        .with_filename_key(|k| Zeroizing::new(*k))
         .ok_or("No filename key")?;
     let content_key = state
-        .with_content_key(|k| *k)
+        .with_content_key(|k| Zeroizing::new(*k))
         .ok_or("No content key")?;
 
-    let data = ops::read_file(&vault_path, &path, &filename_key, &content_key, raw64)
+    let mut data = ops::read_file(&vault_path, &path, &filename_key, &content_key, raw64)
         .map_err(|e| format!("Failed to read file: {}", e))?;
 
-    // Try to interpret as UTF-8 text
-    match String::from_utf8(data.clone()) {
+    // Take ownership of plaintext from Zeroizing wrapper (avoids clone)
+    let bytes = std::mem::take(&mut *data);
+    match String::from_utf8(bytes) {
         Ok(text) => Ok(FileContent::Text(text)),
-        Err(_) => {
+        Err(e) => {
             use base64::engine::general_purpose::STANDARD;
             use base64::Engine;
-            Ok(FileContent::Binary(STANDARD.encode(&data)))
+            let mut bytes = e.into_bytes();
+            let encoded = STANDARD.encode(&bytes);
+            zeroize::Zeroize::zeroize(&mut bytes);
+            Ok(FileContent::Binary(encoded))
         }
     }
 }
@@ -94,10 +99,10 @@ pub async fn write_file(
     let raw64 = use_raw64(&state);
 
     let filename_key = state
-        .with_filename_key(|k| *k)
+        .with_filename_key(|k| Zeroizing::new(*k))
         .ok_or("No filename key")?;
     let content_key = state
-        .with_content_key(|k| *k)
+        .with_content_key(|k| Zeroizing::new(*k))
         .ok_or("No content key")?;
 
     ops::write_file(
@@ -124,10 +129,10 @@ pub async fn create_file(
     let raw64 = use_raw64(&state);
 
     let filename_key = state
-        .with_filename_key(|k| *k)
+        .with_filename_key(|k| Zeroizing::new(*k))
         .ok_or("No filename key")?;
     let content_key = state
-        .with_content_key(|k| *k)
+        .with_content_key(|k| Zeroizing::new(*k))
         .ok_or("No content key")?;
 
     ops::create_file(&vault_path, &dir, &name, &filename_key, &content_key, raw64)
@@ -147,7 +152,7 @@ pub async fn create_dir(
     let raw64 = use_raw64(&state);
 
     let filename_key = state
-        .with_filename_key(|k| *k)
+        .with_filename_key(|k| Zeroizing::new(*k))
         .ok_or("No filename key")?;
 
     ops::create_directory(&vault_path, &parent, &name, &filename_key, raw64)
@@ -167,7 +172,7 @@ pub async fn rename_entry(
     let raw64 = use_raw64(&state);
 
     let filename_key = state
-        .with_filename_key(|k| *k)
+        .with_filename_key(|k| Zeroizing::new(*k))
         .ok_or("No filename key")?;
 
     ops::rename_entry(&vault_path, &old_path, &new_name, &filename_key, raw64)
@@ -187,7 +192,7 @@ pub async fn delete_entry(
     let raw64 = use_raw64(&state);
 
     let filename_key = state
-        .with_filename_key(|k| *k)
+        .with_filename_key(|k| Zeroizing::new(*k))
         .ok_or("No filename key")?;
 
     ops::delete_entry(&vault_path, &path, &filename_key, raw64)
@@ -208,10 +213,10 @@ pub async fn copy_entry(
     let raw64 = use_raw64(&state);
 
     let filename_key = state
-        .with_filename_key(|k| *k)
+        .with_filename_key(|k| Zeroizing::new(*k))
         .ok_or("No filename key")?;
     let content_key = state
-        .with_content_key(|k| *k)
+        .with_content_key(|k| Zeroizing::new(*k))
         .ok_or("No content key")?;
 
     ops::copy_entry(
@@ -238,10 +243,10 @@ pub async fn search_files(
     let raw64 = use_raw64(&state);
 
     let filename_key = state
-        .with_filename_key(|k| *k)
+        .with_filename_key(|k| Zeroizing::new(*k))
         .ok_or("No filename key")?;
     let content_key = state
-        .with_content_key(|k| *k)
+        .with_content_key(|k| Zeroizing::new(*k))
         .ok_or("No content key")?;
 
     ops::search_files(&vault_path, &query, &filename_key, &content_key, raw64)
@@ -261,14 +266,18 @@ pub async fn import_files(
     let raw64 = use_raw64(&state);
 
     let filename_key = state
-        .with_filename_key(|k| *k)
+        .with_filename_key(|k| Zeroizing::new(*k))
         .ok_or("No filename key")?;
     let content_key = state
-        .with_content_key(|k| *k)
+        .with_content_key(|k| Zeroizing::new(*k))
         .ok_or("No content key")?;
 
     for ext_path in &external_paths {
         let source = std::path::Path::new(ext_path);
+        // Validate path is absolute and doesn't traverse to sensitive locations
+        if !source.is_absolute() {
+            return Err("Import paths must be absolute".to_string());
+        }
         let file_name = source
             .file_name()
             .ok_or("Invalid filename")?
@@ -318,14 +327,20 @@ pub async fn export_file(
     ensure_unlocked(&state)?;
     state.touch();
 
+    // Validate export path is absolute
+    let dest_path = std::path::Path::new(&external_dest);
+    if !dest_path.is_absolute() {
+        return Err("Export path must be absolute".to_string());
+    }
+
     let vault_path = state.vault_path().ok_or("No vault path")?;
     let raw64 = use_raw64(&state);
 
     let filename_key = state
-        .with_filename_key(|k| *k)
+        .with_filename_key(|k| Zeroizing::new(*k))
         .ok_or("No filename key")?;
     let content_key = state
-        .with_content_key(|k| *k)
+        .with_content_key(|k| Zeroizing::new(*k))
         .ok_or("No content key")?;
 
     let data = ops::read_file(
@@ -337,8 +352,9 @@ pub async fn export_file(
     )
     .map_err(|e| format!("Failed to read file: {}", e))?;
 
-    std::fs::write(&external_dest, &data)
+    std::fs::write(&external_dest, &*data)
         .map_err(|e| format!("Failed to write exported file: {}", e))?;
+    // data is Zeroizing<Vec<u8>> — auto-zeroized on drop
 
     Ok(())
 }

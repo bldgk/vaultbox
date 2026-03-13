@@ -67,9 +67,11 @@ pub fn derive_master_key(
     let cipher = Aes256Gcm::new_from_slice(scrypt_key.as_ref())
         .map_err(|_| KdfError::InvalidKeyLength)?;
 
-    let master_key_vec = cipher
-        .decrypt(nonce, ciphertext)
-        .map_err(|_| KdfError::DecryptionFailed)?;
+    let master_key_vec = Zeroizing::new(
+        cipher
+            .decrypt(nonce, ciphertext)
+            .map_err(|_| KdfError::DecryptionFailed)?,
+    );
 
     if master_key_vec.len() != 32 {
         return Err(KdfError::InvalidKeyLength);

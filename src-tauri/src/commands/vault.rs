@@ -14,6 +14,9 @@ pub struct VaultInfo {
     pub path: String,
     pub version: u32,
     pub feature_flags: Vec<String>,
+    /// Master key shown once on vault creation, then wiped. None for open_vault.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub master_key_hex: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -38,8 +41,8 @@ pub async fn open_vault(
             .map_err(|e| format!("Failed to load config: {}", e))?,
     };
 
-    // Convert bytes to string for scrypt, then zeroize both copies
-    let mut password_str = String::from_utf8(password.clone())
+    // Convert bytes to string for scrypt, then zeroize
+    let mut password_str = String::from_utf8(std::mem::take(&mut password))
         .map_err(|_| "Invalid password encoding".to_string())?;
     password.zeroize();
 
@@ -67,6 +70,7 @@ pub async fn open_vault(
         path: path.clone(),
         version: config.version,
         feature_flags: config.feature_flags.clone(),
+        master_key_hex: None,
     };
 
     state.unlock(vault_path, config, master_key, content_key, filename_key);
@@ -177,11 +181,22 @@ pub async fn create_vault(
     let filename_key = kdf::derive_filename_key(&master_key)
         .map_err(|e| format!("Failed to derive filename key: {}", e))?;
 
+    // Format master key as hex for one-time display, then it will be zeroized
+    let mut master_key_hex = master_key
+        .iter()
+        .map(|b| format!("{:02x}", b))
+        .collect::<Vec<_>>()
+        .join("");
+
     let info = VaultInfo {
         path: path.clone(),
         version: 2,
         feature_flags,
+        master_key_hex: Some(master_key_hex.clone()),
     };
+
+    // Zeroize the hex string copy
+    zeroize::Zeroize::zeroize(&mut master_key_hex);
 
     state.unlock(vault_path, config, master_key, content_key, filename_key);
 

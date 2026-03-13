@@ -12,6 +12,7 @@ export interface VaultInfo {
   path: string;
   version: number;
   feature_flags: string[];
+  master_key_hex?: string;
 }
 
 export interface VaultStatusResponse {

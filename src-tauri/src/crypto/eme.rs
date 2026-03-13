@@ -5,6 +5,7 @@
 
 use aes::cipher::{BlockDecrypt, BlockEncrypt, KeyInit, generic_array::GenericArray};
 use aes::Aes256;
+use zeroize::Zeroize;
 
 const BLOCK_SIZE: usize = 16;
 
@@ -63,7 +64,7 @@ fn eme_transform(key: &[u8; 32], tweak: &[u8; BLOCK_SIZE], data: &[u8], encrypt:
     // Output array
     let mut c = vec![0u8; data.len()];
 
-    let l_table = tabulate_l(&cipher, m);
+    let mut l_table = tabulate_l(&cipher, m);
 
     // First pass: PPj = Pj ⊕ L[j], then PPPj = AES(PPj, direction)
     let mut ppj = [0u8; BLOCK_SIZE];
@@ -134,6 +135,14 @@ fn eme_transform(key: &[u8; 32], tweak: &[u8; BLOCK_SIZE], data: &[u8], encrypt:
             c[j * BLOCK_SIZE + k] ^= l_table[j][k];
         }
     }
+
+    // Zeroize key-derived intermediate values
+    for entry in l_table.iter_mut() {
+        entry.zeroize();
+    }
+    mp.zeroize();
+    mc.zeroize();
+    m_val.zeroize();
 
     c
 }

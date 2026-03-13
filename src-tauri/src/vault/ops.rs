@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 
 use crate::crypto::{content, diriv, filename};
 use thiserror::Error;
+use zeroize::Zeroizing;
 
 #[derive(Debug, Error)]
 pub enum OpsError {
@@ -121,7 +122,7 @@ pub fn read_file(
     filename_key: &[u8; 32],
     content_key: &[u8; 32],
     use_raw64: bool,
-) -> Result<Vec<u8>, OpsError> {
+) -> Result<Zeroizing<Vec<u8>>, OpsError> {
     let encrypted_path =
         resolve_encrypted_path(vault_path, relative_path, filename_key, use_raw64)?;
     let encrypted_data = fs::read(&encrypted_path)?;

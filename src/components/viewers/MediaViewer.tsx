@@ -8,7 +8,7 @@ function getMediaUrl(filePath: string): string {
 }
 
 export function MediaViewer({ tabIndex }: { tabIndex: number }) {
-  const { openTabs, setFullscreenPreview } = useFileStore();
+  const { openTabs, setFullscreenPreview, fullscreenPreview } = useFileStore();
   const tab = openTabs[tabIndex];
   const content = tab?.content;
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -19,10 +19,11 @@ export function MediaViewer({ tabIndex }: { tabIndex: number }) {
 
   const src = getMediaUrl(tab.path);
 
-  // Space bar to toggle play/pause
+  // Space bar to toggle play/pause (skip when fullscreen viewer is active — it has its own handler)
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if (e.key !== " ") return;
+      if (fullscreenPreview) return;
       const tag = (e.target as HTMLElement)?.tagName;
       if (tag === "INPUT" || tag === "TEXTAREA") return;
 
@@ -34,7 +35,7 @@ export function MediaViewer({ tabIndex }: { tabIndex: number }) {
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [isAudio]);
+  }, [isAudio, fullscreenPreview]);
 
   const handleFullscreen = () => {
     if (tab && content) {

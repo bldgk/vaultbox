@@ -247,7 +247,7 @@ fn test_key_isolation_content_vs_filename() {
 
     // Correct key works
     let decrypted = content::decrypt_file(&content_key, &encrypted).unwrap();
-    assert_eq!(&decrypted, plaintext);
+    assert_eq!(decrypted.as_slice(), plaintext);
 
     // Wrong key fails (GCM tag mismatch)
     let result = content::decrypt_file(&filename_key, &encrypted);
@@ -384,15 +384,15 @@ fn test_scrypt_different_salts_different_keys() {
 // LOCKED KEY INTEGRATION TESTS
 // ============================================================================
 
-/// Verify LockedKey stores data correctly and is accessible via deref.
+/// Verify LockedKey stores data correctly and is accessible via use_key.
 #[test]
 fn test_locked_key_roundtrip() {
     use vaultbox_lib::security::locked_key::LockedKey;
 
     let key = LockedKey::new([0x42; 32]);
-    assert_eq!(&*key, &[0x42; 32]);
-    assert_eq!(key[0], 0x42);
-    assert_eq!(key[31], 0x42);
+    key.use_key(|k| {
+        assert_eq!(k, &[0x42; 32]);
+    });
 }
 
 /// Verify LockedKey drop doesn't panic (zeroize + munlock).
@@ -402,7 +402,7 @@ fn test_locked_key_drop_cycle() {
 
     for i in 0..100u8 {
         let key = LockedKey::new([i; 32]);
-        assert_eq!(key[0], i);
+        key.use_key(|k| assert_eq!(k[0], i));
         drop(key);
     }
 }
@@ -445,7 +445,7 @@ fn test_vault_state_locked_key_lifecycle() {
     let plaintext = b"secret data in locked memory";
     let encrypted = content::encrypt_file(&ck, plaintext).unwrap();
     let decrypted = content::decrypt_file(&ck, &encrypted).unwrap();
-    assert_eq!(&decrypted, plaintext);
+    assert_eq!(decrypted.as_slice(), plaintext);
 
     // Lock the vault — LockedKey::drop fires (zeroize + munlock)
     state.lock();

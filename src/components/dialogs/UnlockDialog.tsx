@@ -1,6 +1,6 @@
 import { useState, useRef, useCallback } from "react";
 import { useVaultStore } from "../../store/vaultStore";
-import { openVault, createVault } from "../../hooks/useTauriCommands";
+import { openVault, createVault, VaultInfo } from "../../hooks/useTauriCommands";
 import { open } from "@tauri-apps/plugin-dialog";
 
 /**
@@ -45,6 +45,9 @@ export function UnlockDialog() {
   const [configPath, setConfigPath] = useState("");
   const [useExternalConfig, setUseExternalConfig] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [masterKeyHex, setMasterKeyHex] = useState<string | null>(null);
+  const [pendingVaultInfo, setPendingVaultInfo] = useState<VaultInfo | null>(null);
+  const [keyCopied, setKeyCopied] = useState(false);
   const { error, setError, setUnlocked, addRecentVault, recentVaults } = useVaultStore();
 
   const handleSelectFolder = async () => {
@@ -64,6 +67,30 @@ export function UnlockDialog() {
     }
   };
 
+  const handleDismissMasterKey = () => {
+    // Wipe the master key from state and proceed to vault
+    setMasterKeyHex(null);
+    setKeyCopied(false);
+    if (pendingVaultInfo) {
+      // Strip master_key_hex before storing in vault state
+      const { master_key_hex: _, ...cleanInfo } = pendingVaultInfo;
+      addRecentVault(cleanInfo.path);
+      setUnlocked(cleanInfo);
+      setPendingVaultInfo(null);
+    }
+  };
+
+  const handleCopyMasterKey = async () => {
+    if (!masterKeyHex) return;
+    try {
+      await navigator.clipboard.writeText(masterKeyHex);
+      setKeyCopied(true);
+      setTimeout(() => setKeyCopied(false), 2000);
+    } catch {
+      // Fallback: select the text for manual copy
+    }
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!path || !securePassword.hasValue) return;
@@ -80,8 +107,15 @@ export function UnlockDialog() {
       const info = mode === "open"
         ? await openVault(path, passwordBytes, externalConf)
         : await createVault(path, passwordBytes);
-      addRecentVault(path);
-      setUnlocked(info);
+
+      if (info.master_key_hex) {
+        // Show master key dialog before proceeding
+        setMasterKeyHex(info.master_key_hex);
+        setPendingVaultInfo(info);
+      } else {
+        addRecentVault(path);
+        setUnlocked(info);
+      }
     } catch (err) {
       // Ensure bytes are zeroed even on error (consume already zeroed the buffer,
       // and the IPC layer zeros its copy, but belt-and-suspenders)
@@ -91,6 +125,48 @@ export function UnlockDialog() {
       setLoading(false);
     }
   };
+
+  if (masterKeyHex) {
+    return (
+      <div className="flex items-center justify-center min-h-screen bg-gray-950">
+        <div className="w-full max-w-lg p-8 bg-gray-900 rounded-2xl shadow-2xl border border-gray-800">
+          <div className="flex items-center gap-3 mb-4">
+            <div className="w-10 h-10 bg-amber-600 rounded-lg flex items-center justify-center">
+              <svg className="w-6 h-6 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z" />
+              </svg>
+            </div>
+            <h2 className="text-lg font-semibold text-white">Master Key</h2>
+          </div>
+
+          <div className="p-3 bg-amber-900/30 border border-amber-800 rounded-lg text-amber-200 text-sm mb-4">
+            Save this master key in a safe place. It is the only way to recover your vault if you forget your password. This key will not be shown again.
+          </div>
+
+          <div className="relative group">
+            <code className="block w-full p-3 bg-gray-800 border border-gray-700 rounded-lg text-green-400 text-sm font-mono break-all select-all">
+              {masterKeyHex}
+            </code>
+            <button
+              type="button"
+              onClick={handleCopyMasterKey}
+              className="absolute top-2 right-2 px-2 py-1 bg-gray-700 rounded text-xs text-gray-300 hover:text-white hover:bg-gray-600 transition"
+            >
+              {keyCopied ? "Copied" : "Copy"}
+            </button>
+          </div>
+
+          <button
+            type="button"
+            onClick={handleDismissMasterKey}
+            className="w-full mt-6 py-2.5 bg-indigo-600 text-white rounded-lg font-medium text-sm hover:bg-indigo-700 transition"
+          >
+            I've saved the key — Continue
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="flex items-center justify-center min-h-screen bg-gray-950">

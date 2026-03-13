@@ -6,6 +6,7 @@ pub mod vault;
 use std::sync::Arc;
 use tauri::Manager;
 use vault::state::{VaultState, VaultStatus};
+use zeroize::Zeroizing;
 
 fn mime_from_path(path: &str) -> &'static str {
     let ext = path.rsplit('.').next().unwrap_or("").to_lowercase();
@@ -66,7 +67,7 @@ fn parse_range(range_header: &str, total: usize) -> Option<(usize, usize)> {
 fn error_response(status: u16) -> tauri::http::Response<Vec<u8>> {
     tauri::http::Response::builder()
         .status(status)
-        .header("Access-Control-Allow-Origin", "*")
+        .header("Access-Control-Allow-Origin", "tauri://localhost")
         .body(Vec::new())
         .unwrap()
 }
@@ -89,22 +90,23 @@ fn serve_media(
             None => return error_response(404),
         };
         let raw64 = state.config().map(|c| c.uses_raw64()).unwrap_or(true);
-        let filename_key = match state.with_filename_key(|k| *k) {
+        let filename_key = match state.with_filename_key(|k| Zeroizing::new(*k)) {
             Some(k) => k,
             None => return error_response(500),
         };
-        let content_key = match state.with_content_key(|k| *k) {
+        let content_key = match state.with_content_key(|k| Zeroizing::new(*k)) {
             Some(k) => k,
             None => return error_response(500),
         };
 
         match vault::ops::read_file(&vault_path, path, &filename_key, &content_key, raw64) {
-            Ok(data) => {
-                state.cache_media(path.to_string(), data.clone());
-                data
+            Ok(mut data) => {
+                let bytes = std::mem::take(&mut *data);
+                state.cache_media(path.to_string(), bytes.clone());
+                bytes
             }
             Err(e) => {
-                eprintln!("vaultmedia: failed to read {}: {}", path, e);
+                eprintln!("vaultmedia: failed to decrypt media: {}", e);
                 return error_response(404);
             }
         }
@@ -123,7 +125,7 @@ fn serve_media(
                 .header("Accept-Ranges", "bytes")
                 .header("Content-Range", format!("bytes {}-{}/{}", start, end, total))
                 .header("Content-Length", chunk.len().to_string())
-                .header("Access-Control-Allow-Origin", "*")
+                .header("Access-Control-Allow-Origin", "tauri://localhost")
                 .body(chunk)
                 .unwrap();
         }
@@ -135,7 +137,7 @@ fn serve_media(
         .header("Content-Type", mime)
         .header("Accept-Ranges", "bytes")
         .header("Content-Length", total.to_string())
-        .header("Access-Control-Allow-Origin", "*")
+        .header("Access-Control-Allow-Origin", "tauri://localhost")
         .body(data)
         .unwrap()
 }
@@ -348,6 +350,7 @@ pub fn run() {
             commands::files::import_files,
             commands::files::export_file,
             commands::clipboard::set_clipboard_timeout,
+            commands::clipboard::copy_to_clipboard,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

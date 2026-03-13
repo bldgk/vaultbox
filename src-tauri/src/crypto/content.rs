@@ -22,6 +22,7 @@ use aes_gcm::{
     Aes256Gcm, Nonce,
 };
 use thiserror::Error;
+use zeroize::{Zeroize, Zeroizing};
 pub const HEADER_LEN: usize = 18;
 pub const FILE_ID_LEN: usize = 16;
 pub const BLOCK_SIZE_PLAIN: usize = 4096;
@@ -93,11 +94,11 @@ fn block_aad(block_num: u64) -> [u8; 8] {
 
 /// Decrypt an entire encrypted file's content.
 /// `data` is the full file bytes (including header).
-/// Returns the decrypted plaintext.
-pub fn decrypt_file(key: &[u8; 32], data: &[u8]) -> Result<Vec<u8>, ContentError> {
+/// Returns the decrypted plaintext wrapped in Zeroizing for automatic zeroization on drop.
+pub fn decrypt_file(key: &[u8; 32], data: &[u8]) -> Result<Zeroizing<Vec<u8>>, ContentError> {
     if data.len() < HEADER_LEN {
         if data.is_empty() {
-            return Ok(Vec::new());
+            return Ok(Zeroizing::new(Vec::new()));
         }
         return Err(ContentError::InvalidHeader);
     }
@@ -106,7 +107,7 @@ pub fn decrypt_file(key: &[u8; 32], data: &[u8]) -> Result<Vec<u8>, ContentError
     let content = &data[HEADER_LEN..];
 
     if content.is_empty() {
-        return Ok(Vec::new());
+        return Ok(Zeroizing::new(Vec::new()));
     }
 
     let cipher =
@@ -134,9 +135,11 @@ pub fn decrypt_file(key: &[u8; 32], data: &[u8]) -> Result<Vec<u8>, ContentError
             .map_err(|_| ContentError::DecryptionFailed(block_num))?;
 
         plaintext.append(&mut decrypted);
+        // Zeroize the source Vec after moving data out (append drains but may leave capacity)
+        decrypted.zeroize();
     }
 
-    Ok(plaintext)
+    Ok(Zeroizing::new(plaintext))
 }
 
 /// Encrypt plaintext content into gocryptfs format.
@@ -256,7 +259,7 @@ mod tests {
         assert!(encrypted.len() > HEADER_LEN);
 
         let decrypted = decrypt_file(&key, &encrypted).unwrap();
-        assert_eq!(&decrypted, plaintext);
+        assert_eq!(decrypted.as_slice(), plaintext);
     }
 
     #[test]
@@ -278,7 +281,7 @@ mod tests {
 
         let encrypted = encrypt_file(&key, &plaintext).unwrap();
         let decrypted = decrypt_file(&key, &encrypted).unwrap();
-        assert_eq!(decrypted, plaintext);
+        assert_eq!(*decrypted, plaintext);
     }
 
     #[test]
@@ -290,7 +293,7 @@ mod tests {
         assert_eq!(encrypted.len(), HEADER_LEN + BLOCK_SIZE_CIPHER);
 
         let decrypted = decrypt_file(&key, &encrypted).unwrap();
-        assert_eq!(decrypted, plaintext);
+        assert_eq!(*decrypted, plaintext);
     }
 
     #[test]
@@ -326,7 +329,7 @@ mod tests {
         let encrypted = encrypt_file(&key, &plaintext).unwrap();
         assert_eq!(encrypted.len(), HEADER_LEN + BLOCK_SIZE_CIPHER * 2);
         let decrypted = decrypt_file(&key, &encrypted).unwrap();
-        assert_eq!(decrypted, plaintext);
+        assert_eq!(*decrypted, plaintext);
     }
 
     #[test]
@@ -337,7 +340,7 @@ mod tests {
         let encrypted = encrypt_file(&key, &plaintext).unwrap();
         assert_eq!(encrypted.len(), HEADER_LEN + BLOCK_SIZE_CIPHER + 17); // 1 byte + 16 tag
         let decrypted = decrypt_file(&key, &encrypted).unwrap();
-        assert_eq!(decrypted, plaintext);
+        assert_eq!(*decrypted, plaintext);
     }
 
     #[test]
@@ -347,7 +350,7 @@ mod tests {
         let plaintext: Vec<u8> = (0..1_000_000).map(|i| (i % 251) as u8).collect();
         let encrypted = encrypt_file(&key, &plaintext).unwrap();
         let decrypted = decrypt_file(&key, &encrypted).unwrap();
-        assert_eq!(decrypted, plaintext);
+        assert_eq!(*decrypted, plaintext);
     }
 
     #[test]
@@ -418,7 +421,7 @@ mod tests {
         assert_eq!(parsed_id, file_id);
 
         let decrypted = decrypt_file(&key, &encrypted).unwrap();
-        assert_eq!(&decrypted, plaintext);
+        assert_eq!(decrypted.as_slice(), plaintext);
     }
 
     #[test]
@@ -520,7 +523,7 @@ mod tests {
         let plaintext = &[0xAA];
         let encrypted = encrypt_file(&key, plaintext).unwrap();
         let decrypted = decrypt_file(&key, &encrypted).unwrap();
-        assert_eq!(&decrypted, plaintext);
+        assert_eq!(decrypted.as_slice(), plaintext);
     }
 
     #[test]
@@ -529,7 +532,7 @@ mod tests {
         let plaintext = vec![0u8; 8192]; // 2 blocks of zeros
         let encrypted = encrypt_file(&key, &plaintext).unwrap();
         let decrypted = decrypt_file(&key, &encrypted).unwrap();
-        assert_eq!(decrypted, plaintext);
+        assert_eq!(*decrypted, plaintext);
     }
 
     #[test]

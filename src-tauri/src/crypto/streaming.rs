@@ -14,6 +14,7 @@ use aes_gcm::{
 };
 use lru::LruCache;
 use std::num::NonZeroUsize;
+use zeroize::{Zeroize, Zeroizing};
 
 const DEFAULT_CACHE_SIZE: usize = 256; // ~1 MB cache (256 * 4096)
 
@@ -23,7 +24,7 @@ pub struct StreamingReader {
     cipher: Aes256Gcm,
     position: u64,
     plaintext_size: u64,
-    cache: LruCache<u64, Vec<u8>>,
+    cache: LruCache<u64, Zeroizing<Vec<u8>>>,
 }
 
 impl StreamingReader {
@@ -57,9 +58,9 @@ impl StreamingReader {
         })
     }
 
-    fn decrypt_block(&mut self, block_num: u64) -> io::Result<Vec<u8>> {
+    fn decrypt_block(&mut self, block_num: u64) -> io::Result<Zeroizing<Vec<u8>>> {
         if let Some(cached) = self.cache.get(&block_num) {
-            return Ok(cached.clone());
+            return Ok(Zeroizing::new((**cached).clone()));
         }
 
         let file_offset = HEADER_LEN as u64 + block_num * BLOCK_SIZE_CIPHER as u64;
@@ -68,7 +69,8 @@ impl StreamingReader {
         let mut block_buf = vec![0u8; BLOCK_SIZE_CIPHER];
         let bytes_read = self.file.read(&mut block_buf)?;
         if bytes_read == 0 {
-            return Ok(Vec::new());
+            block_buf.zeroize();
+            return Ok(Zeroizing::new(Vec::new()));
         }
         block_buf.truncate(bytes_read);
 
@@ -91,12 +93,20 @@ impl StreamingReader {
             .decrypt(nonce, payload)
             .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "Decryption failed"))?;
 
-        self.cache.put(block_num, decrypted.clone());
-        Ok(decrypted)
+        block_buf.zeroize();
+        self.cache.put(block_num, Zeroizing::new(decrypted.clone()));
+        Ok(Zeroizing::new(decrypted))
     }
 
     pub fn plaintext_size(&self) -> u64 {
         self.plaintext_size
+    }
+}
+
+impl Drop for StreamingReader {
+    fn drop(&mut self) {
+        self.cache.clear(); // Drops all Zeroizing<Vec<u8>> entries, zeroizing each
+        self.file_id.zeroize();
     }
 }
 

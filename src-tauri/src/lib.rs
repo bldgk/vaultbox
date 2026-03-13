@@ -1,6 +1,6 @@
 mod commands;
 pub mod crypto;
-mod security;
+pub mod security;
 pub mod vault;
 
 use std::sync::Arc;

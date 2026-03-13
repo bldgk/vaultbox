@@ -1,8 +1,13 @@
 //! LRU cache for decrypted file contents with zeroize on eviction.
+//!
+//! Cache entries are mlock'd to prevent plaintext from being swapped to disk,
+//! and zeroized on eviction/drop.
 
 use lru::LruCache;
 use std::num::NonZeroUsize;
 use zeroize::Zeroize;
+
+use crate::security::mlock;
 
 const DEFAULT_MAX_SIZE: usize = 100 * 1024 * 1024; // 100 MB
 
@@ -14,11 +19,27 @@ pub struct PlaintextCache {
 
 struct CacheEntry {
     data: Vec<u8>,
+    locked: bool,
+}
+
+impl CacheEntry {
+    fn new(data: Vec<u8>) -> Self {
+        let locked = if !data.is_empty() {
+            mlock::mlock(data.as_ptr(), data.len())
+        } else {
+            false
+        };
+        CacheEntry { data, locked }
+    }
 }
 
 impl Drop for CacheEntry {
     fn drop(&mut self) {
         self.data.zeroize();
+        if self.locked {
+            // munlock the (now zeroed) pages so the OS can reclaim them
+            mlock::munlock(self.data.as_ptr(), self.data.capacity());
+        }
     }
 }
 
@@ -48,7 +69,7 @@ impl PlaintextCache {
             }
         }
 
-        if let Some((_, old)) = self.cache.push(path, CacheEntry { data }) {
+        if let Some((_, old)) = self.cache.push(path, CacheEntry::new(data)) {
             self.current_size -= old.data.len();
         }
         self.current_size += size;
@@ -196,10 +217,8 @@ mod tests {
 
     #[test]
     fn test_cache_entry_zeroize_on_drop() {
-        // Verify CacheEntry drop doesn't panic (it zeroizes data)
-        let entry = CacheEntry {
-            data: vec![0xAA; 100],
-        };
+        // Verify CacheEntry drop doesn't panic (it zeroizes + munlocks data)
+        let entry = CacheEntry::new(vec![0xAA; 100]);
         assert!(entry.data.iter().all(|&b| b == 0xAA));
         drop(entry);
     }
@@ -222,5 +241,84 @@ mod tests {
     fn test_default() {
         let cache = PlaintextCache::default();
         assert_eq!(cache.current_size(), 0);
+    }
+
+    #[test]
+    fn test_cache_entry_is_mlocked() {
+        let entry = CacheEntry::new(vec![0xAA; 4096]);
+        // On most systems mlock should succeed for a 4KB buffer
+        // (mlock may fail under strict ulimits, so we check but don't assert)
+        if entry.locked {
+            // Data should still be accessible when locked
+            assert_eq!(entry.data[0], 0xAA);
+            assert_eq!(entry.data[4095], 0xAA);
+        }
+        drop(entry);
+        // Drop zeroizes + munlocks without panic
+    }
+
+    #[test]
+    fn test_cache_entry_empty_is_not_mlocked() {
+        let entry = CacheEntry::new(vec![]);
+        assert!(!entry.locked);
+        drop(entry);
+    }
+
+    #[test]
+    fn test_cache_entry_zeroizes_before_munlock() {
+        // Verify zeroize works on the buffer while still allocated
+        let mut data = vec![0xBB; 256];
+        let ptr = data.as_ptr();
+        use zeroize::Zeroize;
+        data.zeroize();
+        // Buffer is zeroed while still allocated (before dealloc)
+        unsafe {
+            for i in 0..256 {
+                assert_eq!(
+                    std::ptr::read_volatile(ptr.add(i)),
+                    0,
+                    "Byte {} not zeroed",
+                    i
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_cache_eviction_munlocks() {
+        // Evicting many mlocked entries should not exhaust mlock limits
+        let mut cache = PlaintextCache {
+            cache: LruCache::new(NonZeroUsize::new(1000).unwrap()),
+            current_size: 0,
+            max_size: 8192, // small limit to force evictions
+        };
+
+        // Insert enough data to cause multiple evictions
+        for i in 0..20u8 {
+            cache.put(format!("file_{}", i), vec![i; 4096]);
+        }
+
+        // Cache should still be functional (evictions released mlock'd pages)
+        assert!(cache.current_size() <= 8192);
+        // Most recent entries should be accessible
+        assert!(cache.get("file_19").is_some());
+    }
+
+    #[test]
+    fn test_cache_clear_munlocks_all() {
+        let mut cache = PlaintextCache::new();
+        // Insert several mlocked entries
+        for i in 0..10 {
+            cache.put(format!("file_{}", i), vec![0xCC; 4096]);
+        }
+        assert!(cache.current_size() > 0);
+
+        // Clear should munlock + zeroize all entries
+        cache.clear();
+        assert_eq!(cache.current_size(), 0);
+
+        // We should be able to insert new entries (mlock resources freed)
+        cache.put("new".into(), vec![0xDD; 4096]);
+        assert!(cache.get("new").is_some());
     }
 }

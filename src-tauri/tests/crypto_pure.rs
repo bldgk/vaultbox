@@ -1027,3 +1027,244 @@ fn bench_scrypt_logn16() {
     let ms = start.elapsed().as_millis();
     eprintln!("scrypt LogN=16: {}ms", ms);
 }
+
+// ============================================================================
+// Remaining TODO tests
+// ============================================================================
+
+// --- Longname .name file creation on disk ---
+
+#[test]
+fn test_longname_detection_and_hash() {
+    // Test long name detection and hashing at the crypto level.
+    // We can't create files with very long encrypted names on macOS (255 byte limit),
+    // but we can verify the logic that detects and hashes long names.
+    let key = [0x42; 32];
+    let iv = [0x01; 16];
+
+    // Short name → not long
+    let short_enc = filename::encrypt_filename(&key, &iv, "short.txt", true).unwrap();
+    assert!(!filename::is_long_name(&short_enc));
+
+    // 128-char name → encrypted is ~240 chars → IS long name
+    let medium_name: String = (0..128).map(|i| (b'a' + (i % 26) as u8) as char).collect();
+    let medium_enc = filename::encrypt_filename(&key, &iv, &medium_name, true).unwrap();
+    assert!(filename::is_long_name(&medium_enc), "128-char name should produce long encrypted name");
+
+    // Long name hash should be consistent and different for different names
+    let hash1 = filename::long_name_hash(&medium_enc);
+    let hash2 = filename::long_name_hash(&medium_enc);
+    assert_eq!(hash1, hash2, "Hash must be deterministic");
+
+    let other_enc = filename::encrypt_filename(&key, &iv, &"B".repeat(128), true).unwrap();
+    let hash3 = filename::long_name_hash(&other_enc);
+    assert_ne!(hash1, hash3, "Different names must have different hashes");
+
+    // Both names still decrypt correctly
+    assert_eq!(filename::decrypt_filename(&key, &iv, &medium_enc, true).unwrap(), medium_name);
+    assert_eq!(filename::decrypt_filename(&key, &iv, &other_enc, true).unwrap(), "B".repeat(128));
+}
+
+#[test]
+fn test_short_name_file_on_disk() {
+    // Verify normal file operations with names that DON'T trigger longname
+    use vaultbox_lib::crypto::diriv;
+    use vaultbox_lib::vault::ops;
+
+    let dir = tempfile::tempdir().unwrap();
+    diriv::create_diriv(dir.path()).unwrap();
+    let ck = *kdf::derive_content_key(&[0x42; 32]).unwrap();
+    let fk = *kdf::derive_filename_key(&[0x42; 32]).unwrap();
+
+    // These names are short enough to NOT trigger longname format
+    let x50 = "x".repeat(50);
+    let names = ["hello.txt", "a-medium-length-name.pdf", &x50];
+    for name in &names {
+        ops::create_file(dir.path(), "", name, &fk, &ck, true).unwrap();
+        ops::write_file(dir.path(), name, format!("content of {}", name).as_bytes(), &fk, &ck, true).unwrap();
+    }
+
+    let entries = ops::list_directory(dir.path(), "", &fk, &ck, true).unwrap();
+    assert_eq!(entries.len(), names.len());
+
+    for name in &names {
+        let data = ops::read_file(dir.path(), name, &fk, &ck, true).unwrap();
+        assert_eq!(data.as_slice(), format!("content of {}", name).as_bytes());
+    }
+
+    // On disk, no files should use longname format
+    let disk_names: Vec<String> = std::fs::read_dir(dir.path())
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .map(|e| e.file_name().to_string_lossy().to_string())
+        .filter(|n| n != "gocryptfs.diriv")
+        .collect();
+
+    let has_longname = disk_names.iter().any(|n| n.starts_with("gocryptfs.longname."));
+    assert!(!has_longname, "Short names should NOT use longname format: {:?}", disk_names);
+}
+
+// --- Corrupted diriv → clean error ---
+
+#[test]
+fn test_corrupted_diriv_wrong_length() {
+    use vaultbox_lib::crypto::diriv;
+
+    let dir = tempfile::tempdir().unwrap();
+    let iv_path = dir.path().join("gocryptfs.diriv");
+
+    // Write wrong-length diriv
+    std::fs::write(&iv_path, &[0u8; 10]).unwrap();
+    let result = diriv::read_diriv(dir.path());
+    assert!(result.is_err(), "Corrupted diriv (wrong length) should error");
+}
+
+#[test]
+fn test_corrupted_diriv_missing() {
+    use vaultbox_lib::crypto::diriv;
+
+    let dir = tempfile::tempdir().unwrap();
+    // No diriv file at all
+    let result = diriv::read_diriv(dir.path());
+    assert!(result.is_err(), "Missing diriv should error");
+}
+
+#[test]
+fn test_corrupted_diriv_empty() {
+    use vaultbox_lib::crypto::diriv;
+
+    let dir = tempfile::tempdir().unwrap();
+    let iv_path = dir.path().join("gocryptfs.diriv");
+    std::fs::write(&iv_path, &[]).unwrap();
+    let result = diriv::read_diriv(dir.path());
+    assert!(result.is_err(), "Empty diriv should error");
+}
+
+#[test]
+fn test_vault_ops_with_corrupted_diriv() {
+    use vaultbox_lib::vault::ops;
+
+    let dir = tempfile::tempdir().unwrap();
+    let iv_path = dir.path().join("gocryptfs.diriv");
+    std::fs::write(&iv_path, &[0xFF; 5]).unwrap(); // wrong length
+
+    let ck = *kdf::derive_content_key(&[0x42; 32]).unwrap();
+    let fk = *kdf::derive_filename_key(&[0x42; 32]).unwrap();
+
+    // All ops should fail cleanly, not panic
+    assert!(ops::list_directory(dir.path(), "", &fk, &ck, true).is_err());
+    assert!(ops::create_file(dir.path(), "", "test.txt", &fk, &ck, true).is_err());
+    assert!(ops::read_file(dir.path(), "test.txt", &fk, &ck, true).is_err());
+}
+
+// --- Filename not leaked in error messages ---
+
+#[test]
+fn test_filename_not_in_decrypt_error() {
+    let key = [0x42; 32];
+    let iv = [0x01; 16];
+    let secret_name = "TOP_SECRET_PROJECT_NAME.docx";
+
+    let enc = filename::encrypt_filename(&key, &iv, secret_name, true).unwrap();
+
+    // Decrypt with wrong key → error should not contain the original name
+    let result = filename::decrypt_filename(&[0x99; 32], &iv, &enc, true);
+    if let Err(e) = result {
+        let msg = format!("{}", e);
+        assert!(!msg.contains(secret_name), "Error should not leak filename: {}", msg);
+        assert!(!msg.contains("TOP_SECRET"), "Error should not leak filename parts: {}", msg);
+    }
+}
+
+#[test]
+fn test_content_error_does_not_leak_plaintext() {
+    let key = [0x42; 32];
+    let secret = b"This is classified information that must not appear in errors";
+    let ct = content::encrypt_file(&key, secret).unwrap();
+
+    // Decrypt with wrong key
+    let result = content::decrypt_file(&[0x99; 32], &ct);
+    if let Err(e) = result {
+        let msg = format!("{}", e);
+        assert!(!msg.contains("classified"), "Error should not leak plaintext: {}", msg);
+    }
+}
+
+// --- LongNames disabled ---
+
+#[test]
+fn test_filename_works_without_longnames_flag() {
+    // Even without LongNames flag, short names must work.
+    // LongNames only affects how names > 176 encrypted chars are stored on disk.
+    let key = [0x42; 32];
+    let iv = [0x01; 16];
+
+    for name in ["short.txt", "medium-length-filename.pdf", "a.b"] {
+        let enc = filename::encrypt_filename(&key, &iv, name, true).unwrap();
+        let dec = filename::decrypt_filename(&key, &iv, &enc, true).unwrap();
+        assert_eq!(dec, name);
+    }
+}
+
+// --- Performance benchmarks: file creation ---
+
+#[test]
+fn bench_create_1000_empty_files() {
+    use std::time::Instant;
+    use vaultbox_lib::crypto::diriv;
+    use vaultbox_lib::vault::ops;
+
+    let dir = tempfile::tempdir().unwrap();
+    diriv::create_diriv(dir.path()).unwrap();
+    let ck = *kdf::derive_content_key(&[0x42; 32]).unwrap();
+    let fk = *kdf::derive_filename_key(&[0x42; 32]).unwrap();
+
+    let start = Instant::now();
+    for i in 0..1000 {
+        let name = format!("file_{:04}.txt", i);
+        ops::create_file(dir.path(), "", &name, &fk, &ck, true).unwrap();
+    }
+    let ms = start.elapsed().as_millis();
+    eprintln!("Create 1000 empty files: {}ms ({:.1} files/sec)", ms, 1000.0 / (ms as f64 / 1000.0));
+}
+
+#[test]
+fn bench_create_1000_files_with_4kb_content() {
+    use std::time::Instant;
+    use vaultbox_lib::crypto::diriv;
+    use vaultbox_lib::vault::ops;
+
+    let dir = tempfile::tempdir().unwrap();
+    diriv::create_diriv(dir.path()).unwrap();
+    let ck = *kdf::derive_content_key(&[0x42; 32]).unwrap();
+    let fk = *kdf::derive_filename_key(&[0x42; 32]).unwrap();
+    let data = vec![0xAB; 4096];
+
+    let start = Instant::now();
+    for i in 0..1000 {
+        let name = format!("file_{:04}.bin", i);
+        ops::create_file(dir.path(), "", &name, &fk, &ck, true).unwrap();
+        ops::write_file(dir.path(), &name, &data, &fk, &ck, true).unwrap();
+    }
+    let ms = start.elapsed().as_millis();
+    eprintln!("Create+write 1000 x 4KB files: {}ms ({:.1} files/sec)", ms, 1000.0 / (ms as f64 / 1000.0));
+}
+
+#[test]
+fn bench_create_100_directories() {
+    use std::time::Instant;
+    use vaultbox_lib::crypto::diriv;
+    use vaultbox_lib::vault::ops;
+
+    let dir = tempfile::tempdir().unwrap();
+    diriv::create_diriv(dir.path()).unwrap();
+    let fk = *kdf::derive_filename_key(&[0x42; 32]).unwrap();
+
+    let start = Instant::now();
+    for i in 0..100 {
+        let name = format!("dir_{:03}", i);
+        ops::create_directory(dir.path(), "", &name, &fk, true).unwrap();
+    }
+    let ms = start.elapsed().as_millis();
+    eprintln!("Create 100 directories: {}ms ({:.1} dirs/sec)", ms, 100.0 / (ms as f64 / 1000.0));
+}

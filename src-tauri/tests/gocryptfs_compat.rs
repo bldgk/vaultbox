@@ -228,3 +228,106 @@ fn test_cross_decrypt_content_via_fuse() {
         assert_eq!(data.as_slice(), expected.as_slice(), "Content mismatch for '{}'", name);
     }
 }
+
+/// VaultBox creates a vault with files → gocryptfs mounts and reads them back.
+/// This proves our encrypt is compatible with their decrypt.
+#[test]
+#[ignore = "requires FUSE mount — run with: cargo test --test gocryptfs_compat -- --ignored"]
+fn test_vaultbox_creates_vault_gocryptfs_reads() {
+    if !has_gocryptfs() {
+        panic!("gocryptfs binary not found. Set GOCRYPTFS_BIN env var or add to PATH");
+    }
+
+    let dir = tempfile::tempdir().unwrap();
+    let cipher = dir.path().join("cipher");
+    let plain = dir.path().join("plain");
+    std::fs::create_dir_all(&cipher).unwrap();
+    std::fs::create_dir_all(&plain).unwrap();
+
+    let password = "vaultbox-creates-pw";
+
+    // Step 1: Create vault with gocryptfs -init (we need a valid config+master key)
+    gocryptfs_init(&cipher, password);
+
+    // Step 2: Derive keys with Rust (same as VaultBox does)
+    let config = GocryptfsConfig::load(&cipher).unwrap();
+    let master = kdf::derive_master_key(password, &config).unwrap();
+    let fk = kdf::derive_filename_key(&master).unwrap();
+    let ck = kdf::derive_content_key(&master).unwrap();
+    let raw64 = config.uses_raw64();
+
+    // Step 3: Create files using VaultBox Rust code (our encrypt)
+    let test_files: Vec<(&str, Vec<u8>)> = vec![
+        ("rust_empty.txt", vec![]),
+        ("rust_hello.txt", b"Written by VaultBox Rust code!".to_vec()),
+        ("rust_4kb.bin", vec![0xDE; 4096]),
+        ("rust_multi.bin", (0..12345u32).map(|i| (i % 251) as u8).collect()),
+    ];
+
+    for (name, data) in &test_files {
+        vaultbox_lib::vault::ops::create_file(&cipher, "", name, &fk, &ck, raw64)
+            .expect(&format!("Failed to create '{}'", name));
+        if !data.is_empty() {
+            vaultbox_lib::vault::ops::write_file(&cipher, name, data, &fk, &ck, raw64)
+                .expect(&format!("Failed to write '{}'", name));
+        }
+    }
+
+    // Also create a subdirectory with a file
+    vaultbox_lib::vault::ops::create_directory(&cipher, "", "rust_subdir", &fk, raw64)
+        .expect("Failed to create subdir");
+    vaultbox_lib::vault::ops::create_file(&cipher, "rust_subdir", "nested.txt", &fk, &ck, raw64)
+        .expect("Failed to create nested file");
+    vaultbox_lib::vault::ops::write_file(&cipher, "rust_subdir/nested.txt", b"nested content from Rust", &fk, &ck, raw64)
+        .expect("Failed to write nested file");
+
+    eprintln!("VaultBox created {} files + 1 subdir with nested file", test_files.len());
+
+    // Step 4: Mount with gocryptfs and read back
+    let output = Command::new(gocryptfs_bin())
+        .args(["-extpass", &format!("echo {}", password), cipher.to_str().unwrap(), plain.to_str().unwrap()])
+        .output().unwrap();
+    assert!(output.status.success(), "gocryptfs mount failed: {}", String::from_utf8_lossy(&output.stderr));
+
+    // Step 5: Verify gocryptfs can read every file we created
+    for (name, expected) in &test_files {
+        let path = plain.join(name);
+        assert!(path.exists(), "gocryptfs should see '{}' but file not found", name);
+        let actual = std::fs::read(&path).expect(&format!("gocryptfs couldn't read '{}'", name));
+        assert_eq!(
+            actual, *expected,
+            "Content mismatch for '{}': VaultBox wrote {} bytes, gocryptfs read {} bytes",
+            name, expected.len(), actual.len()
+        );
+        eprintln!("  {} — {} bytes OK", name, actual.len());
+    }
+
+    // Verify nested file
+    let nested = plain.join("rust_subdir/nested.txt");
+    assert!(nested.exists(), "gocryptfs should see nested file");
+    let nested_data = std::fs::read(&nested).unwrap();
+    assert_eq!(nested_data, b"nested content from Rust");
+    eprintln!("  rust_subdir/nested.txt — OK");
+
+    // Verify directory listing matches
+    let mut go_names: Vec<String> = std::fs::read_dir(&plain)
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .map(|e| e.file_name().to_string_lossy().to_string())
+        .collect();
+    go_names.sort();
+    eprintln!("gocryptfs sees: {:?}", go_names);
+
+    for (name, _) in &test_files {
+        assert!(go_names.contains(&name.to_string()), "gocryptfs missing '{}'", name);
+    }
+    assert!(go_names.contains(&"rust_subdir".to_string()), "gocryptfs missing 'rust_subdir'");
+
+    // Unmount
+    #[cfg(target_os = "macos")]
+    { Command::new("umount").arg(plain.to_str().unwrap()).output().ok(); }
+    #[cfg(target_os = "linux")]
+    { Command::new("fusermount").args(["-u", plain.to_str().unwrap()]).output().ok(); }
+
+    eprintln!("\nVaultBox → gocryptfs cross-validation PASSED!");
+}

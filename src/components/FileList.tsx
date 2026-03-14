@@ -1,10 +1,11 @@
 import { useEffect, useCallback, useState, useRef } from "react";
 import { useFileStore } from "../store/fileStore";
-import { listDir, readFile, deleteEntry, renameEntry, exportFile, copyEntry } from "../hooks/useTauriCommands";
+import { listDir, readFile, deleteEntry, renameEntry, exportFile, copyEntry, importFiles } from "../hooks/useTauriCommands";
 import type { FileEntry } from "../hooks/useTauriCommands";
 import { formatFileSize, formatDate, getViewerType } from "../lib/fileTypes";
 import { ContextMenu, type ContextMenuItem } from "./ContextMenu";
 import { save } from "@tauri-apps/plugin-dialog";
+import { getCurrentWebview } from "@tauri-apps/api/webview";
 
 export function FileList() {
   const {
@@ -18,6 +19,7 @@ export function FileList() {
   const [renamingEntry, setRenamingEntry] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState("");
   const renameInputRef = useRef<HTMLInputElement>(null);
+  const [isDragOver, setIsDragOver] = useState(false);
 
   const loadEntries = useCallback(async () => {
     setLoading(true);
@@ -36,6 +38,32 @@ export function FileList() {
   useEffect(() => {
     loadEntries();
   }, [loadEntries]);
+
+  // Tauri drag-and-drop: import files dropped onto the window
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+
+    getCurrentWebview().onDragDropEvent((event) => {
+      if (event.payload.type === "enter" || event.payload.type === "over") {
+        setIsDragOver(true);
+      } else if (event.payload.type === "drop") {
+        setIsDragOver(false);
+        const paths = event.payload.paths;
+        if (paths.length > 0) {
+          const { currentPath } = useFileStore.getState();
+          startBusy(`Importing ${paths.length} file(s)...`);
+          importFiles(paths, currentPath)
+            .then(() => useFileStore.getState().refresh())
+            .catch((err) => alert(`Import failed: ${err}`))
+            .finally(() => stopBusy());
+        }
+      } else if (event.payload.type === "leave") {
+        setIsDragOver(false);
+      }
+    }).then((fn) => { unlisten = fn; });
+
+    return () => { unlisten?.(); };
+  }, []);
 
   // Focus rename input when it appears
   useEffect(() => {
@@ -231,8 +259,12 @@ export function FileList() {
 
   if (sorted.length === 0) {
     return (
-      <div className="flex-1 flex items-center justify-center text-gray-500 text-sm">
-        {searchResults ? "No files match your search" : "This folder is empty"}
+      <div className="flex-1 flex items-center justify-center text-gray-500 text-sm relative">
+        {isDragOver ? (
+          <DragOverlay />
+        ) : (
+          searchResults ? "No files match your search" : "Drop files here or use Import"
+        )}
       </div>
     );
   }
@@ -261,7 +293,8 @@ export function FileList() {
 
   if (viewMode === "grid") {
     return (
-      <div className="flex-1 overflow-auto p-3" onClick={() => setContextMenu(null)}>
+      <div className="flex-1 overflow-auto p-3 relative" onClick={() => setContextMenu(null)}>
+        {isDragOver && <DragOverlay />}
         <div className="grid grid-cols-[repeat(auto-fill,minmax(100px,1fr))] gap-2">
           {sorted.map((entry) => (
             <button
@@ -296,7 +329,8 @@ export function FileList() {
   }
 
   return (
-    <div className="flex-1 overflow-auto" onClick={() => setContextMenu(null)}>
+    <div className="flex-1 overflow-auto relative" onClick={() => setContextMenu(null)}>
+      {isDragOver && <DragOverlay />}
       <table className="w-full text-xs">
         <thead className="sticky top-0 bg-gray-900 z-10">
           <tr className="text-gray-400 text-left">
@@ -360,6 +394,20 @@ export function FileList() {
           onClose={() => setContextMenu(null)}
         />
       )}
+    </div>
+  );
+}
+
+function DragOverlay() {
+  return (
+    <div className="absolute inset-0 z-20 flex items-center justify-center bg-indigo-950/80 border-2 border-dashed border-indigo-400 rounded-lg m-2 pointer-events-none">
+      <div className="text-center">
+        <svg className="w-12 h-12 mx-auto mb-3 text-indigo-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
+        </svg>
+        <p className="text-indigo-300 text-sm font-medium">Drop files to import</p>
+        <p className="text-indigo-400/60 text-xs mt-1">Files will be encrypted into the vault</p>
+      </div>
     </div>
   );
 }

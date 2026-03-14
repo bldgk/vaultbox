@@ -389,7 +389,7 @@ fn search_recursive(
 }
 
 /// Resolve a plaintext relative path to the encrypted filesystem path.
-fn resolve_encrypted_path(
+pub fn resolve_encrypted_path(
     vault_path: &Path,
     relative_path: &str,
     filename_key: &[u8; 32],

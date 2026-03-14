@@ -72,6 +72,9 @@ fn error_response(status: u16) -> tauri::http::Response<Vec<u8>> {
         .unwrap()
 }
 
+/// Size threshold for streaming vs full-read: files > 10 MB use streaming.
+const STREAMING_THRESHOLD: u64 = 10 * 1024 * 1024;
+
 fn serve_media(
     state: &VaultState,
     path: &str,
@@ -81,24 +84,46 @@ fn serve_media(
         return error_response(403);
     }
 
-    // Check media cache first, then decrypt
+    let vault_path = match state.vault_path() {
+        Some(p) => p,
+        None => return error_response(404),
+    };
+    let raw64 = state.config().map(|c| c.uses_raw64()).unwrap_or(true);
+    let filename_key = match state.with_filename_key(|k| Zeroizing::new(*k)) {
+        Some(k) => k,
+        None => return error_response(500),
+    };
+    let content_key = match state.with_content_key(|k| Zeroizing::new(*k)) {
+        Some(k) => k,
+        None => return error_response(500),
+    };
+
+    // Resolve plaintext path → encrypted path on disk
+    let encrypted_path = match vault::ops::resolve_encrypted_path(
+        &vault_path, path, &filename_key, raw64,
+    ) {
+        Ok(p) => p,
+        Err(_) => return error_response(404),
+    };
+
+    // Check file size to decide: stream large files, fully read small ones
+    let file_size = match std::fs::metadata(&encrypted_path) {
+        Ok(m) => m.len(),
+        Err(_) => return error_response(404),
+    };
+
+    let plaintext_total = crypto::content::plaintext_size(file_size) as usize;
+    let mime = mime_from_path(path);
+
+    if file_size > STREAMING_THRESHOLD {
+        // Large file: use StreamingReader — only decrypt requested range
+        return serve_media_streaming(&encrypted_path, &content_key, mime, plaintext_total, range_header);
+    }
+
+    // Small file: check cache, or decrypt fully
     let data = if let Some(cached) = state.get_cached_media(path) {
         cached
     } else {
-        let vault_path = match state.vault_path() {
-            Some(p) => p,
-            None => return error_response(404),
-        };
-        let raw64 = state.config().map(|c| c.uses_raw64()).unwrap_or(true);
-        let filename_key = match state.with_filename_key(|k| Zeroizing::new(*k)) {
-            Some(k) => k,
-            None => return error_response(500),
-        };
-        let content_key = match state.with_content_key(|k| Zeroizing::new(*k)) {
-            Some(k) => k,
-            None => return error_response(500),
-        };
-
         match vault::ops::read_file(&vault_path, path, &filename_key, &content_key, raw64) {
             Ok(mut data) => {
                 let bytes = std::mem::take(&mut *data);
@@ -106,16 +131,14 @@ fn serve_media(
                 bytes
             }
             Err(e) => {
-                eprintln!("vaultmedia: failed to decrypt media: {}", e);
+                eprintln!("vaultmedia: failed to decrypt: {}", e);
                 return error_response(404);
             }
         }
     };
 
-    let mime = mime_from_path(path);
     let total = data.len();
 
-    // Handle Range requests (essential for video seeking)
     if let Some(range) = range_header {
         if let Some((start, end)) = parse_range(range, total) {
             let chunk = data[start..=end].to_vec();
@@ -131,7 +154,6 @@ fn serve_media(
         }
     }
 
-    // Full content response
     tauri::http::Response::builder()
         .status(200)
         .header("Content-Type", mime)
@@ -139,6 +161,60 @@ fn serve_media(
         .header("Content-Length", total.to_string())
         .header("Access-Control-Allow-Origin", "tauri://localhost")
         .body(data)
+        .unwrap()
+}
+
+/// Serve large files using StreamingReader — only decrypts the requested range.
+fn serve_media_streaming(
+    encrypted_path: &std::path::Path,
+    content_key: &Zeroizing<[u8; 32]>,
+    mime: &str,
+    plaintext_total: usize,
+    range_header: Option<&str>,
+) -> tauri::http::Response<Vec<u8>> {
+    use std::io::{Read, Seek, SeekFrom};
+
+    let mut reader = match crypto::streaming::StreamingReader::open(encrypted_path, content_key) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("vaultmedia: streaming open failed: {}", e);
+            return error_response(404);
+        }
+    };
+
+    let total = reader.plaintext_size() as usize;
+
+    if let Some(range) = range_header {
+        if let Some((start, end)) = parse_range(range, total) {
+            let len = end - start + 1;
+            reader.seek(SeekFrom::Start(start as u64)).ok();
+            let mut buf = vec![0u8; len];
+            let n = reader.read(&mut buf).unwrap_or(0);
+            buf.truncate(n);
+
+            return tauri::http::Response::builder()
+                .status(206)
+                .header("Content-Type", mime)
+                .header("Accept-Ranges", "bytes")
+                .header("Content-Range", format!("bytes {}-{}/{}", start, start + n - 1, total))
+                .header("Content-Length", n.to_string())
+                .header("Access-Control-Allow-Origin", "tauri://localhost")
+                .body(buf)
+                .unwrap();
+        }
+    }
+
+    // Full read fallback (browser didn't send Range)
+    let mut buf = Vec::with_capacity(total);
+    let _ = reader.read_to_end(&mut buf);
+
+    tauri::http::Response::builder()
+        .status(200)
+        .header("Content-Type", mime)
+        .header("Accept-Ranges", "bytes")
+        .header("Content-Length", buf.len().to_string())
+        .header("Access-Control-Allow-Origin", "tauri://localhost")
+        .body(buf)
         .unwrap()
 }
 

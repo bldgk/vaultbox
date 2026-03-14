@@ -320,4 +320,63 @@ mod tests {
         let result = derive_master_key("password", &config);
         assert!(result.is_err());
     }
+
+    // ---- gocryptfs HKDF known-vector tests ----
+    // These vectors are derived from gocryptfs Go implementation behavior:
+    // HKDF-SHA256 with salt=None, IKM=master key, info=purpose string.
+
+    fn hex_encode(data: &[u8]) -> String {
+        data.iter().map(|b| format!("{:02x}", b)).collect()
+    }
+
+    #[test]
+    fn test_hkdf_vector_zero_key_filename() {
+        // master=0x00*32, info="EME filename encryption"
+        let master = [0x00u8; 32];
+        let result = derive_filename_key(&master).unwrap();
+        assert_eq!(
+            hex_encode(result.as_ref()),
+            "9ba3cddd48c6339c6e56ebe85f0281d6e9051be4104176e65cb0f8a6f77ae6b4",
+            "HKDF(0x00*32, 'EME filename encryption') mismatch"
+        );
+    }
+
+    #[test]
+    fn test_hkdf_vector_zero_key_filename_constant_name() {
+        // Verify the derive_filename_key function uses the correct info string
+        // by checking the same vector again via raw HKDF.
+        let master = [0x00u8; 32];
+        let hk = Hkdf::<Sha256>::new(None, &master);
+        let mut derived = [0u8; 32];
+        hk.expand(b"EME filename encryption", &mut derived).unwrap();
+        assert_eq!(
+            hex_encode(&derived),
+            "9ba3cddd48c6339c6e56ebe85f0281d6e9051be4104176e65cb0f8a6f77ae6b4",
+            "Raw HKDF with 'EME filename encryption' info string mismatch"
+        );
+    }
+
+    #[test]
+    fn test_hkdf_vector_one_key_filename() {
+        // master=0x01*32, info="EME filename encryption"
+        let master = [0x01u8; 32];
+        let result = derive_filename_key(&master).unwrap();
+        assert_eq!(
+            hex_encode(result.as_ref()),
+            "e8a2499f48700b954f31de732efd04abce822f5c948e7fbc0896607be0d36d12",
+            "HKDF(0x01*32, 'EME filename encryption') mismatch"
+        );
+    }
+
+    #[test]
+    fn test_hkdf_vector_one_key_content() {
+        // master=0x01*32, info="AES-GCM file content encryption"
+        let master = [0x01u8; 32];
+        let result = derive_content_key(&master).unwrap();
+        assert_eq!(
+            hex_encode(result.as_ref()),
+            "9137f2e67a842484137f3c458f357f204c30d7458f94f432fa989be96854a649",
+            "HKDF(0x01*32, 'AES-GCM file content encryption') mismatch"
+        );
+    }
 }

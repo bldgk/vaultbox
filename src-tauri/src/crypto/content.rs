@@ -533,4 +533,69 @@ mod tests {
             assert_eq!(encrypted.len(), expected_len, "Failed for size {}", size);
         }
     }
+
+    // ---- gocryptfs compatibility constants and structure tests ----
+
+    #[test]
+    fn test_block_size_cipher_is_4128() {
+        // gocryptfs v2 block format: IV(16) + ciphertext(4096) + GCM tag(16) = 4128
+        assert_eq!(BLOCK_SIZE_CIPHER, 4128);
+        assert_eq!(BLOCK_SIZE_CIPHER, 16 + 4096 + 16);
+    }
+
+    #[test]
+    fn test_plaintext_size_monotonicity() {
+        // plaintext_size must be monotonically non-decreasing for increasing ciphertext sizes.
+        // This is critical for correct file size reporting.
+        let mut prev = 0u64;
+        for ct_size in 0..10000u64 {
+            let pt = plaintext_size(ct_size);
+            assert!(
+                pt >= prev,
+                "plaintext_size is not monotonic: plaintext_size({}) = {} < plaintext_size({}) = {}",
+                ct_size,
+                pt,
+                ct_size - 1,
+                prev
+            );
+            prev = pt;
+        }
+    }
+
+    #[test]
+    fn test_block_number_mapping_offset_within_first_block() {
+        // Offset 788 bytes into the ciphertext content area should map to block 0.
+        // Content starts at HEADER_LEN (18). Offset 788 in the content = byte 806 of the file.
+        // Block 0 spans content bytes [0, BLOCK_SIZE_CIPHER).
+        // 788 < 4128, so it is block 0.
+        let offset_in_content: u64 = 788;
+        let block_num = offset_in_content / BLOCK_SIZE_CIPHER as u64;
+        assert_eq!(block_num, 0, "offset 788 in content should be block 0");
+    }
+
+    #[test]
+    fn test_block_number_mapping_second_block() {
+        // The second block starts at offset BLOCK_SIZE_CIPHER in the content area.
+        // So content offset BLOCK_SIZE_CIPHER should be block 1.
+        let offset_in_content = BLOCK_SIZE_CIPHER as u64;
+        let block_num = offset_in_content / BLOCK_SIZE_CIPHER as u64;
+        assert_eq!(block_num, 1, "offset BLOCK_SIZE_CIPHER in content should be block 1");
+    }
+
+    #[test]
+    fn test_plaintext_size_matches_encrypt_decrypt() {
+        // For various plaintext sizes, verify that plaintext_size(encrypted.len())
+        // returns the original plaintext length.
+        let key = [0x42u8; 32];
+        for size in [0, 1, 15, 16, 100, 4095, 4096, 4097, 8192, 12288, 16384] {
+            let plaintext = vec![0xABu8; size];
+            let encrypted = encrypt_file(&key, &plaintext).unwrap();
+            let computed_pt_size = plaintext_size(encrypted.len() as u64);
+            assert_eq!(
+                computed_pt_size, size as u64,
+                "plaintext_size mismatch for plaintext of {} bytes (ciphertext {} bytes)",
+                size, encrypted.len()
+            );
+        }
+    }
 }

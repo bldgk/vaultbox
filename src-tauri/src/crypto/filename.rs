@@ -385,4 +385,112 @@ mod tests {
         let decrypted = decrypt_filename(&key, &dir_iv, &encrypted, true).unwrap();
         assert_eq!(decrypted, name);
     }
+
+    // ---- Edge case tests for gocryptfs compatibility ----
+
+    #[test]
+    fn test_encrypt_decrypt_name_with_slash() {
+        // Filenames containing "/" are unusual (not normally valid on POSIX),
+        // but the encryption layer should handle the bytes correctly.
+        let key = [0x42u8; 32];
+        let dir_iv = [0x01u8; 16];
+        let name = "path/separator";
+
+        let encrypted = encrypt_filename(&key, &dir_iv, name, true).unwrap();
+        let decrypted = decrypt_filename(&key, &dir_iv, &encrypted, true).unwrap();
+        assert_eq!(decrypted, name);
+    }
+
+    #[test]
+    fn test_encrypt_decrypt_name_with_null_byte() {
+        // Null bytes in filenames: encryption handles raw bytes, but the name
+        // won't survive String::from_utf8 since null is valid UTF-8 but unusual.
+        // The padding/encryption should still work at the byte level.
+        let key = [0x42u8; 32];
+        let dir_iv = [0x01u8; 16];
+        let name = "null\x00byte";
+
+        // This should work because \x00 is valid UTF-8
+        let encrypted = encrypt_filename(&key, &dir_iv, name, true).unwrap();
+        let decrypted = decrypt_filename(&key, &dir_iv, &encrypted, true).unwrap();
+        assert_eq!(decrypted, name);
+    }
+
+    #[test]
+    fn test_encrypt_decrypt_very_long_name() {
+        // Test a 255-character filename (common filesystem max)
+        let key = [0x42u8; 32];
+        let dir_iv = [0x01u8; 16];
+        let name: String = (0..255).map(|i| (b'a' + (i % 26) as u8) as char).collect();
+        assert_eq!(name.len(), 255);
+
+        let encrypted = encrypt_filename(&key, &dir_iv, &name, true).unwrap();
+        // Long names produce long encrypted output
+        assert!(encrypted.len() > 176, "255-char name should produce a long encrypted name");
+        let decrypted = decrypt_filename(&key, &dir_iv, &encrypted, true).unwrap();
+        assert_eq!(decrypted, name);
+    }
+
+    #[test]
+    fn test_encrypt_decrypt_name_300_chars() {
+        // Test beyond typical filesystem limits
+        let key = [0x42u8; 32];
+        let dir_iv = [0x01u8; 16];
+        let name: String = "X".repeat(300);
+
+        let encrypted = encrypt_filename(&key, &dir_iv, &name, true).unwrap();
+        let decrypted = decrypt_filename(&key, &dir_iv, &encrypted, true).unwrap();
+        assert_eq!(decrypted, name);
+    }
+
+    #[test]
+    fn test_encrypt_decrypt_dot_names() {
+        let key = [0x42u8; 32];
+        let dir_iv = [0x01u8; 16];
+
+        // "." - current directory marker
+        let encrypted = encrypt_filename(&key, &dir_iv, ".", true).unwrap();
+        let decrypted = decrypt_filename(&key, &dir_iv, &encrypted, true).unwrap();
+        assert_eq!(decrypted, ".");
+
+        // ".." - parent directory marker
+        let encrypted = encrypt_filename(&key, &dir_iv, "..", true).unwrap();
+        let decrypted = decrypt_filename(&key, &dir_iv, &encrypted, true).unwrap();
+        assert_eq!(decrypted, "..");
+
+        // "..." - unusual but valid
+        let encrypted = encrypt_filename(&key, &dir_iv, "...", true).unwrap();
+        let decrypted = decrypt_filename(&key, &dir_iv, &encrypted, true).unwrap();
+        assert_eq!(decrypted, "...");
+    }
+
+    #[test]
+    fn test_dot_names_are_all_different_encrypted() {
+        let key = [0x42u8; 32];
+        let dir_iv = [0x01u8; 16];
+
+        let enc_dot = encrypt_filename(&key, &dir_iv, ".", true).unwrap();
+        let enc_dotdot = encrypt_filename(&key, &dir_iv, "..", true).unwrap();
+        let enc_dotdotdot = encrypt_filename(&key, &dir_iv, "...", true).unwrap();
+
+        assert_ne!(enc_dot, enc_dotdot);
+        assert_ne!(enc_dot, enc_dotdotdot);
+        assert_ne!(enc_dotdot, enc_dotdotdot);
+    }
+
+    #[test]
+    fn test_long_name_detection_for_255_char_name() {
+        let key = [0x42u8; 32];
+        let dir_iv = [0x01u8; 16];
+        let name: String = "A".repeat(255);
+
+        let encrypted = encrypt_filename(&key, &dir_iv, &name, true).unwrap();
+        // A 255-byte name padded to 256 bytes (next 16-byte boundary),
+        // then encrypted (same size), then base64 encoded.
+        // 256 bytes base64 = ~342 chars, which is > 176.
+        assert!(
+            is_long_name(&encrypted),
+            "Encrypted 255-char name should be detected as a long name"
+        );
+    }
 }

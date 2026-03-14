@@ -4,18 +4,42 @@ A desktop application for browsing gocryptfs-encrypted vaults without mounting t
 
 Cryptographic compatibility with gocryptfs v2 is verified by cross-validation tests: files encrypted by [gocryptfs](https://github.com/rfjakob/gocryptfs) are decrypted by VaultBox and vice versa.
 
+![VaultBox Screenshot](assets/screenshot.png)
+
 > **Warning:** This is an experimental project. The cryptographic implementation has not been independently audited. There may be bugs that corrupt data or compromise security. **Use at your own risk.** Do not rely on this as your only way to access important encrypted data — always keep backups.
 
 ## Features
 
+### Vault Management
 - Open and browse gocryptfs v2 encrypted vaults
-- Create new encrypted vaults with master key backup
-- View files inline: text (with syntax highlighting), images, video, audio, hex
-- Edit and save text files back to the vault
-- Full file operations: create, rename, copy, delete, import, export
-- Search across decrypted filenames
+- Create new encrypted vaults with password strength indicator and master key backup
 - Auto-lock after 10 minutes of inactivity
 - Zero plaintext on disk — everything stays in memory
+
+### File Viewers
+- **Text editor** — CodeMirror 6 with syntax highlighting for 15+ languages, Cmd+S to save
+- **Markdown preview** — Live split-view rendering with toggle button
+- **PDF viewer** — pdfjs-dist with zoom, fit-width/fit-page, page navigation, scroll tracking
+- **Image viewer** — Inline preview with fullscreen mode, zoom, pan, double-click to toggle
+- **Media player** — Streaming video/audio via `vaultmedia://` protocol with HTTP Range support
+- **Archive viewer** — Browse .zip contents with tree view; extract individual files or all to vault/disk
+- **Hex viewer** — Binary inspection with offset/hex/ASCII display
+
+### File Operations
+- Create, rename, copy, move, delete, import, export
+- Batch operations — multi-select for Export All, Copy All, Delete All
+- Move to folder via right-click context menu with flyout submenu
+- Search across decrypted filenames
+- Cmd+N to create new file, Cmd+Shift+N for new folder
+
+### UI
+- Split view — side-by-side file comparison (Alt+click tab for right pane)
+- Tab reorder via pointer drag
+- File type icons — unique colored SVGs for code, config, markup, audio, archive, shell, PDF
+- Image gallery — fullscreen thumbnail strip with keyboard navigation (arrows, Home, End)
+- File info panel (Cmd+I) — file type, size, dates, path, image preview
+- Custom confirm dialogs for all destructive actions
+- Dark theme (gray-950), Tailwind CSS v4
 
 ## Security Model
 
@@ -62,6 +86,18 @@ VaultBox is designed to keep decrypted data isolated to a single process, unlike
 | `validate_external_path()` | Import/export blocked for `/etc`, `/System`, `/usr`, `/bin`, `/proc`, `/sys`, all hidden directories (`.ssh`, `.gnupg`, `.aws`, `.config`, etc.) |
 | Vault operations | Path resolution constrained to `vault_path` — no traversal outside vault directory |
 
+### Content rendering safety
+
+All vault content is rendered safely — no user-supplied scripts can execute:
+
+| Content type | Rendering method | Script execution |
+|-------------|-----------------|-----------------|
+| HTML, SVG, JSON, TXT | CodeMirror text editor | Impossible — displayed as source code |
+| Markdown preview | Custom renderer with `escapeHtml()` | Blocked — HTML tags escaped, `javascript:` links stripped |
+| Images (including SVG) | `<img src="vaultmedia://...">` | Blocked — browsers don't execute scripts in `<img>` tags |
+| PDF | pdfjs-dist canvas rendering | Blocked — pdfjs does not execute embedded JS |
+| Archives (.zip) | Metadata parsing only | Impossible — no content rendering |
+
 ### Known limitations
 
 - WebView holds internal copies of DOM input values and rendered content — not controllable from application code
@@ -71,7 +107,7 @@ VaultBox is designed to keep decrypted data isolated to a single process, unlike
 
 ## Architecture
 
-- **Frontend**: React 19 + TypeScript + Tailwind CSS 4 + CodeMirror 6
+- **Frontend**: React 19 + TypeScript + Tailwind CSS 4 + CodeMirror 6 + pdfjs-dist
 - **Backend**: Rust (Tauri v2) handling all crypto operations
 - **Crypto**: AES-256-GCM (128-bit nonces) content encryption, EME (ECB-Mix-ECB) filename encryption, scrypt + HKDF-SHA256 key derivation
 - **IPC**: Tauri `invoke()` — in-process, not over network sockets
@@ -105,16 +141,61 @@ cd src-tauri
 cargo test
 ```
 
-334 tests across 7 test suites:
+337 tests across 7 test suites:
 
 | Suite | Tests | What's covered |
 |-------|------:|----------------|
 | Unit tests (`--lib`) | 203 | AES-256-GCM content encryption (16-byte nonces, 24-byte AAD), EME filename encryption, HKDF key derivation with known vectors, scrypt KDF, config parsing, streaming decryption, vault state management, LRU cache with mlock/zeroize, XOR-masked key storage, core dump prevention |
 | `crypto_pure` | 78 | HKDF known vectors from gocryptfs, real vault KDF validation, block size/offset monotonicity, range splitting, content roundtrips (0B–10MB), filename roundtrips (dot names, Unicode, 300-char), AAD format verification, corruption detection, concurrent encrypt/decrypt, performance benchmarks, security edge cases |
 | `vault_ops` | 25 | Full vault CRUD on real encrypted structures: create/read/write/rename/delete/copy/search, nested directories, Unicode names, plaintext-not-on-disk verification |
-| `memory_security` | 19 | Zeroize verification via raw pointers, mlock lifecycle, key isolation, no plaintext leakage in ciphertext/filenames, scrypt brute-force resistance, XOR-masked key roundtrips |
+| `memory_security` | 22 | Zeroize verification via raw pointers (decrypt results, derived keys, LockedKey temporaries), mlock lifecycle, key isolation, no plaintext leakage in ciphertext/filenames, scrypt brute-force resistance, XOR-masked key roundtrips |
 | `gocryptfs_compat` | 6 | Cross-validation with real gocryptfs binary: VaultBox decrypts gocryptfs-created files, gocryptfs decrypts VaultBox-created files, config/key derivation compatibility |
 | `debug_kdf` | 3 | Step-by-step KDF comparison with Go output (scrypt → HKDF → GCM → master key), pure HKDF vector validation |
+
+### Fuzz testing
+
+Fuzz targets for crypto modules are in `src-tauri/fuzz/`. They use [cargo-fuzz](https://github.com/rust-lang/cargo-fuzz) (libFuzzer) to find panics, crashes, and roundtrip violations.
+
+```bash
+# Prerequisites
+rustup toolchain install nightly
+cargo install cargo-fuzz
+
+# Run a fuzz target (from src-tauri/)
+cargo +nightly fuzz run fuzz_content_decrypt -- -max_total_time=300
+```
+
+| Target | What it fuzzes |
+|--------|---------------|
+| `fuzz_content_decrypt` | Arbitrary bytes → `decrypt_file()` — no panics or OOM |
+| `fuzz_content_roundtrip` | `encrypt_file(x)` → `decrypt_file()` == `x` for all inputs |
+| `fuzz_filename` | Arbitrary strings → filename decrypt + encrypt→decrypt roundtrip |
+| `fuzz_eme` | EME encrypt→decrypt roundtrip for all block-aligned inputs |
+
+### Security audit commands
+
+```bash
+cd src-tauri
+
+# Check dependencies for known vulnerabilities (CVEs)
+cargo audit
+
+# Count unsafe blocks in the dependency tree
+cargo geiger
+
+# Search for unsafe in VaultBox source (should only be in security/ primitives)
+grep -rn "unsafe" src/
+```
+
+**Unsafe audit summary** (VaultBox source only):
+
+| Location | Count | Purpose |
+|----------|------:|---------|
+| `security/mlock.rs` | 4 | `libc::mlock`/`munlock` system calls |
+| `security/coredump.rs` | 2 | `libc::setrlimit` to disable core dumps |
+| `vault/cache.rs` | 1 | `read_volatile` in tests |
+| `security/locked_key.rs` | 1 | `read_volatile` in tests |
+| `crypto/` | 0 | No unsafe in any crypto module |
 
 ### Cross-validation (requires FUSE)
 

@@ -1,7 +1,8 @@
 import { useEffect } from "react";
 import { useFileStore } from "../store/fileStore";
 import { useVaultStore } from "../store/vaultStore";
-import { copyEntry, deleteEntry } from "./useTauriCommands";
+import { useDialogStore } from "../store/dialogStore";
+import { copyEntry, deleteEntry, createFile } from "./useTauriCommands";
 
 export function useKeyboardShortcuts() {
   const { status } = useVaultStore();
@@ -15,11 +16,31 @@ export function useKeyboardShortcuts() {
 
       const state = useFileStore.getState();
 
-      // Cmd+N — new file dialog (handled via Toolbar, but we trigger it here)
-      if (e.key === "n") {
+      // Cmd+Shift+N — new folder dialog
+      if (e.key === "N" && e.shiftKey) {
         e.preventDefault();
-        // Dispatch a custom event that Toolbar listens for
-        window.dispatchEvent(new CustomEvent("vault:new-file"));
+        window.dispatchEvent(new CustomEvent("vault:new-folder"));
+        return;
+      }
+
+      // Cmd+N — create new untitled.txt immediately
+      if (e.key === "n" && !e.shiftKey) {
+        e.preventDefault();
+        const { currentPath } = state;
+        // Find unique name
+        const existingNames = new Set(state.entries.map((en) => en.name));
+        let name = "untitled.txt";
+        let counter = 1;
+        while (existingNames.has(name)) {
+          name = `untitled${counter}.txt`;
+          counter++;
+        }
+        try {
+          await createFile(currentPath, name);
+          state.refresh();
+        } catch {
+          // silently fail
+        }
         return;
       }
 
@@ -90,10 +111,22 @@ export function useKeyboardShortcuts() {
           }
           state.refresh();
         } catch (err) {
-          alert(`Paste failed: ${err}`);
+          useDialogStore.getState().showConfirm({
+            title: "Error",
+            message: `Paste failed: ${err}`,
+            confirmLabel: "OK",
+            onConfirm: () => {},
+          });
         } finally {
           state.stopBusy();
         }
+        return;
+      }
+
+      // Cmd+I — toggle file info panel
+      if (e.key === "i") {
+        e.preventDefault();
+        state.toggleInfoPanel();
         return;
       }
 

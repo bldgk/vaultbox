@@ -1,0 +1,5 @@
+{
+  "name": "<script>alert('json-xss')</script>",
+  "value": "<img src=x onerror=alert('json-img')>",
+  "url": "javascript:alert('json-js-link')"
+}

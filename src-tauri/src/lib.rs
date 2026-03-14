@@ -99,12 +99,11 @@ fn serve_media(
     };
 
     // Resolve plaintext path → encrypted path on disk
-    let encrypted_path = match vault::ops::resolve_encrypted_path(
-        &vault_path, path, &filename_key, raw64,
-    ) {
-        Ok(p) => p,
-        Err(_) => return error_response(404),
-    };
+    let encrypted_path =
+        match vault::ops::resolve_encrypted_path(&vault_path, path, &filename_key, raw64) {
+            Ok(p) => p,
+            Err(_) => return error_response(404),
+        };
 
     // Check file size to decide: stream large files, fully read small ones
     let file_size = match std::fs::metadata(&encrypted_path) {
@@ -117,7 +116,13 @@ fn serve_media(
 
     if file_size > STREAMING_THRESHOLD {
         // Large file: use StreamingReader — only decrypt requested range
-        return serve_media_streaming(&encrypted_path, &content_key, mime, plaintext_total, range_header);
+        return serve_media_streaming(
+            &encrypted_path,
+            &content_key,
+            mime,
+            plaintext_total,
+            range_header,
+        );
     }
 
     // Small file: check cache, or decrypt fully
@@ -146,7 +151,10 @@ fn serve_media(
                 .status(206)
                 .header("Content-Type", mime)
                 .header("Accept-Ranges", "bytes")
-                .header("Content-Range", format!("bytes {}-{}/{}", start, end, total))
+                .header(
+                    "Content-Range",
+                    format!("bytes {}-{}/{}", start, end, total),
+                )
                 .header("Content-Length", chunk.len().to_string())
                 .header("Access-Control-Allow-Origin", "tauri://localhost")
                 .body(chunk)
@@ -169,7 +177,7 @@ fn serve_media_streaming(
     encrypted_path: &std::path::Path,
     content_key: &Zeroizing<[u8; 32]>,
     mime: &str,
-    plaintext_total: usize,
+    _plaintext_total: usize,
     range_header: Option<&str>,
 ) -> tauri::http::Response<Vec<u8>> {
     use std::io::{Read, Seek, SeekFrom};
@@ -196,7 +204,10 @@ fn serve_media_streaming(
                 .status(206)
                 .header("Content-Type", mime)
                 .header("Accept-Ranges", "bytes")
-                .header("Content-Range", format!("bytes {}-{}/{}", start, start + n - 1, total))
+                .header(
+                    "Content-Range",
+                    format!("bytes {}-{}/{}", start, start + n - 1, total),
+                )
                 .header("Content-Length", n.to_string())
                 .header("Access-Control-Allow-Origin", "tauri://localhost")
                 .body(buf)
@@ -384,7 +395,8 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .manage(vault_state)
         .register_asynchronous_uri_scheme_protocol("vaultmedia", |ctx, request, responder| {
-            let state: Arc<VaultState> = ctx.app_handle().state::<Arc<VaultState>>().inner().clone();
+            let state: Arc<VaultState> =
+                ctx.app_handle().state::<Arc<VaultState>>().inner().clone();
 
             let uri = request.uri().to_string();
             // URI format: vaultmedia://localhost/<encoded-path>

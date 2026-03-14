@@ -40,6 +40,9 @@ interface FileStore {
   statusText: string;
   clipboard: ClipboardState | null;
   fullscreenPreview: FullscreenPreview | null;
+  showInfoPanel: boolean;
+  splitView: boolean;
+  splitTabIndex: number;
 
   setCurrentPath: (path: string) => void;
   refresh: () => void;
@@ -63,7 +66,11 @@ interface FileStore {
   stopBusy: () => void;
   setStatusText: (text: string) => void;
   setClipboard: (clipboard: ClipboardState | null) => void;
+  reorderTab: (fromIndex: number, toIndex: number) => void;
   setFullscreenPreview: (preview: FullscreenPreview | null) => void;
+  toggleInfoPanel: () => void;
+  toggleSplitView: () => void;
+  setSplitTab: (index: number) => void;
   reset: () => void;
 }
 
@@ -86,6 +93,9 @@ export const useFileStore = create<FileStore>((set) => ({
   statusText: "",
   clipboard: null,
   fullscreenPreview: null,
+  showInfoPanel: false,
+  splitView: false,
+  splitTabIndex: -1,
 
   setCurrentPath: (path) => set({ currentPath: path }),
   refresh: () => set((state) => ({ refreshCounter: state.refreshCounter + 1 })),
@@ -123,7 +133,11 @@ export const useFileStore = create<FileStore>((set) => ({
       const tabs = state.openTabs.filter((_, i) => i !== index);
       let activeIndex = state.activeTabIndex;
       if (activeIndex >= tabs.length) activeIndex = tabs.length - 1;
-      return { openTabs: tabs, activeTabIndex: activeIndex };
+      let splitIndex = state.splitTabIndex;
+      if (splitIndex === index) splitIndex = -1;
+      else if (splitIndex > index) splitIndex--;
+      if (splitIndex >= tabs.length) splitIndex = -1;
+      return { openTabs: tabs, activeTabIndex: activeIndex, splitTabIndex: splitIndex };
     }),
 
   setActiveTab: (index) => set({ activeTabIndex: index }),
@@ -196,8 +210,26 @@ export const useFileStore = create<FileStore>((set) => ({
   startBusy: (status) => set((state) => ({ busyCount: state.busyCount + 1, statusText: status || "Working..." })),
   stopBusy: () => set((state) => ({ busyCount: Math.max(0, state.busyCount - 1), statusText: state.busyCount <= 1 ? "" : state.statusText })),
   setStatusText: (text) => set({ statusText: text }),
+  reorderTab: (fromIndex, toIndex) =>
+    set((state) => {
+      const tabs = [...state.openTabs];
+      const [moved] = tabs.splice(fromIndex, 1);
+      tabs.splice(toIndex, 0, moved);
+      let activeIndex = state.activeTabIndex;
+      if (activeIndex === fromIndex) activeIndex = toIndex;
+      else if (fromIndex < activeIndex && toIndex >= activeIndex) activeIndex--;
+      else if (fromIndex > activeIndex && toIndex <= activeIndex) activeIndex++;
+      return { openTabs: tabs, activeTabIndex: activeIndex };
+    }),
   setClipboard: (clipboard) => set({ clipboard }),
   setFullscreenPreview: (preview) => set({ fullscreenPreview: preview }),
+  toggleInfoPanel: () => set((state) => ({ showInfoPanel: !state.showInfoPanel })),
+  toggleSplitView: () =>
+    set((state) => ({
+      splitView: !state.splitView,
+      splitTabIndex: state.splitView ? -1 : state.splitTabIndex,
+    })),
+  setSplitTab: (index) => set({ splitTabIndex: index }),
 
   reset: () =>
     set({
@@ -216,5 +248,8 @@ export const useFileStore = create<FileStore>((set) => ({
       statusText: "",
       clipboard: null,
       fullscreenPreview: null,
+      showInfoPanel: false,
+      splitView: false,
+      splitTabIndex: -1,
     }),
 }));

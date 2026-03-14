@@ -4,8 +4,17 @@ import { getViewerType } from "../lib/fileTypes";
 
 const PREVIEWABLE_TYPES = new Set(["image", "media"]);
 
+const VIDEO_EXTENSIONS = new Set([
+  "mp4", "m4v", "mov", "ogv", "webm", "avi", "mkv", "3gp",
+]);
+
 function getMediaUrl(filePath: string): string {
   return `vaultmedia://localhost/${encodeURIComponent(filePath)}`;
+}
+
+function isVideoFile(filename: string): boolean {
+  const ext = filename.split(".").pop()?.toLowerCase() ?? "";
+  return VIDEO_EXTENSIONS.has(ext);
 }
 
 export function FullscreenViewer() {
@@ -15,6 +24,8 @@ export function FullscreenViewer() {
   const [isDragging, setIsDragging] = useState(false);
   const dragStart = useRef({ x: 0, y: 0, panX: 0, panY: 0 });
   const videoRef = useRef<HTMLVideoElement>(null);
+  const thumbnailStripRef = useRef<HTMLDivElement>(null);
+  const activeThumbnailRef = useRef<HTMLButtonElement>(null);
 
   // Get list of previewable files in current directory
   const previewableFiles = useMemo(() => {
@@ -23,6 +34,8 @@ export function FullscreenViewer() {
       .map((e) => ({
         name: e.name,
         path: currentPath ? `${currentPath}/${e.name}` : e.name,
+        isVideo: isVideoFile(e.name),
+        viewerType: getViewerType(e.name),
       }));
   }, [entries, currentPath]);
 
@@ -30,6 +43,8 @@ export function FullscreenViewer() {
     if (!fullscreenPreview) return -1;
     return previewableFiles.findIndex((f) => f.path === fullscreenPreview.filePath);
   }, [fullscreenPreview, previewableFiles]);
+
+  const showThumbnailStrip = previewableFiles.length >= 2;
 
   const navigateToFile = useCallback((index: number) => {
     if (index < 0 || index >= previewableFiles.length) return;
@@ -53,6 +68,14 @@ export function FullscreenViewer() {
     if (currentIndex > 0) navigateToFile(currentIndex - 1);
   }, [currentIndex, navigateToFile]);
 
+  const goFirst = useCallback(() => {
+    if (previewableFiles.length > 0) navigateToFile(0);
+  }, [previewableFiles.length, navigateToFile]);
+
+  const goLast = useCallback(() => {
+    if (previewableFiles.length > 0) navigateToFile(previewableFiles.length - 1);
+  }, [previewableFiles.length, navigateToFile]);
+
   // Derive viewer type and sources (must be before early return so hooks are stable)
   const viewerType = fullscreenPreview ? getViewerType(fullscreenPreview.fileName) : null;
   const isImage = viewerType === "image";
@@ -63,6 +86,17 @@ export function FullscreenViewer() {
     if (!fullscreenPreview || (!isImage && !isVideo)) return null;
     return getMediaUrl(fullscreenPreview.filePath);
   }, [fullscreenPreview, isImage, isVideo]);
+
+  // Auto-scroll thumbnail strip to keep active thumbnail visible
+  useEffect(() => {
+    if (activeThumbnailRef.current && thumbnailStripRef.current) {
+      activeThumbnailRef.current.scrollIntoView({
+        behavior: "smooth",
+        block: "nearest",
+        inline: "center",
+      });
+    }
+  }, [currentIndex]);
 
   // Keyboard handler
   useEffect(() => {
@@ -76,6 +110,12 @@ export function FullscreenViewer() {
       } else if (e.key === "ArrowLeft") {
         e.preventDefault();
         goPrev();
+      } else if (e.key === "Home") {
+        e.preventDefault();
+        goFirst();
+      } else if (e.key === "End") {
+        e.preventDefault();
+        goLast();
       } else if (e.key === "+" || e.key === "=") {
         setZoom((z) => Math.min(z * 1.3, 10));
       } else if (e.key === "-") {
@@ -91,7 +131,7 @@ export function FullscreenViewer() {
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [fullscreenPreview, goNext, goPrev, setFullscreenPreview]);
+  }, [fullscreenPreview, goNext, goPrev, goFirst, goLast, setFullscreenPreview]);
 
   // Mouse wheel zoom
   const handleWheel = useCallback((e: React.WheelEvent) => {
@@ -206,6 +246,73 @@ export function FullscreenViewer() {
           <div className="text-gray-500">Cannot display preview</div>
         )}
       </div>
+
+      {/* Thumbnail strip */}
+      {showThumbnailStrip && (
+        <div className="bg-black/70 backdrop-blur-sm px-4 py-2 z-10">
+          <div
+            ref={thumbnailStripRef}
+            className="flex gap-2 overflow-x-auto items-center justify-center scrollbar-thin scrollbar-thumb-gray-600 scrollbar-track-transparent"
+            style={{ scrollbarWidth: "thin" }}
+          >
+            {previewableFiles.map((file, index) => {
+              const isActive = index === currentIndex;
+              return (
+                <button
+                  key={file.path}
+                  ref={isActive ? activeThumbnailRef : undefined}
+                  onClick={() => navigateToFile(index)}
+                  className={`relative flex-shrink-0 w-[60px] h-[60px] rounded overflow-hidden transition-all ${
+                    isActive
+                      ? "ring-2 ring-indigo-500 ring-offset-1 ring-offset-black"
+                      : "opacity-60 hover:opacity-100"
+                  }`}
+                  title={file.name}
+                >
+                  {file.isVideo ? (
+                    /* Video thumbnail: dark placeholder with play icon overlay */
+                    <div className="w-full h-full bg-gray-800 flex items-center justify-center">
+                      <svg
+                        className="w-6 h-6 text-white/80"
+                        fill="currentColor"
+                        viewBox="0 0 24 24"
+                      >
+                        <path d="M8 5v14l11-7z" />
+                      </svg>
+                    </div>
+                  ) : file.viewerType === "image" ? (
+                    /* Image thumbnail */
+                    <img
+                      src={getMediaUrl(file.path)}
+                      alt={file.name}
+                      className="w-full h-full object-cover"
+                      draggable={false}
+                      loading="lazy"
+                    />
+                  ) : (
+                    /* Audio or other media: generic icon */
+                    <div className="w-full h-full bg-gray-800 flex items-center justify-center">
+                      <svg
+                        className="w-5 h-5 text-white/60"
+                        fill="none"
+                        viewBox="0 0 24 24"
+                        stroke="currentColor"
+                      >
+                        <path
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          strokeWidth={2}
+                          d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3"
+                        />
+                      </svg>
+                    </div>
+                  )}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
 
       {/* Navigation arrows */}
       {hasPrev && (

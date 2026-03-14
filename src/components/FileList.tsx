@@ -1,10 +1,11 @@
 import { useEffect, useCallback, useState, useRef } from "react";
 import { useFileStore } from "../store/fileStore";
+import { useDialogStore } from "../store/dialogStore";
 import { listDir, readFile, deleteEntry, renameEntry, exportFile, copyEntry, importFiles } from "../hooks/useTauriCommands";
 import type { FileEntry } from "../hooks/useTauriCommands";
 import { formatFileSize, formatDate, getViewerType } from "../lib/fileTypes";
 import { ContextMenu, type ContextMenuItem } from "./ContextMenu";
-import { save } from "@tauri-apps/plugin-dialog";
+import { save, open as openDialog } from "@tauri-apps/plugin-dialog";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 
 export function FileList() {
@@ -12,7 +13,7 @@ export function FileList() {
     currentPath, refreshCounter, entries, setEntries, selectedFiles, toggleSelection,
     navigateTo, openTab, viewMode, sortBy, sortAsc, setSortBy,
     searchResults, loading, setLoading, clipboard, setClipboard, setFullscreenPreview,
-    startBusy, stopBusy,
+    startBusy, stopBusy, toggleInfoPanel, setSelectedFiles,
   } = useFileStore();
 
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; entry: FileEntry } | null>(null);
@@ -42,19 +43,23 @@ export function FileList() {
   // Tauri drag-and-drop: import files dropped onto the window
   useEffect(() => {
     let unlisten: (() => void) | undefined;
+    let lastDropTime = 0;
 
     getCurrentWebview().onDragDropEvent((event) => {
       if (event.payload.type === "enter" || event.payload.type === "over") {
         setIsDragOver(true);
       } else if (event.payload.type === "drop") {
         setIsDragOver(false);
+        const now = Date.now();
+        if (now - lastDropTime < 1000) return;
+        lastDropTime = now;
         const paths = event.payload.paths;
         if (paths.length > 0) {
           const { currentPath } = useFileStore.getState();
           startBusy(`Importing ${paths.length} file(s)...`);
           importFiles(paths, currentPath)
             .then(() => useFileStore.getState().refresh())
-            .catch((err) => alert(`Import failed: ${err}`))
+            .catch(() => {})
             .finally(() => stopBusy());
         }
       } else if (event.payload.type === "leave") {
@@ -107,23 +112,55 @@ export function FileList() {
       try {
         const content = await readFile(fullPath(entry.name));
         openTab({ path: fullPath(entry.name), name: entry.name, content, modified: false });
+
       } catch (err) {
-        alert(`Failed to read file: ${err}`);
+        showError(`Failed to read file: ${err}`);
       } finally {
         stopBusy();
       }
     }
   };
 
-  const handleDelete = async (entry: FileEntry) => {
-    if (confirm(`Delete "${entry.name}" permanently?`)) {
-      try {
-        await deleteEntry(fullPath(entry.name), true);
-        useFileStore.getState().refresh();
-      } catch (err) {
-        alert(`Failed to delete: ${err}`);
-      }
+  const { showConfirm } = useDialogStore();
+
+  const showError = (msg: string) => {
+    showConfirm({
+      title: "Error",
+      message: msg,
+      confirmLabel: "OK",
+      danger: false,
+      onConfirm: () => {},
+    });
+  };
+
+  // Close any open tabs whose path starts with the deleted path
+  const closeTabsForPath = (deletedPath: string) => {
+    const state = useFileStore.getState();
+    const toClose = state.openTabs
+      .map((t, i) => ({ path: t.path, index: i }))
+      .filter((t) => t.path === deletedPath || t.path.startsWith(deletedPath + "/"))
+      .reverse(); // close from end to avoid index shift
+    for (const t of toClose) {
+      useFileStore.getState().closeTab(t.index);
     }
+  };
+
+  const handleDelete = (entry: FileEntry) => {
+    showConfirm({
+      title: "Delete File",
+      message: `Delete "${entry.name}" permanently? This cannot be undone.`,
+      confirmLabel: "Delete",
+      danger: true,
+      onConfirm: async () => {
+        try {
+          await deleteEntry(fullPath(entry.name), true);
+          closeTabsForPath(fullPath(entry.name));
+          useFileStore.getState().refresh();
+        } catch (err) {
+          showError(`Failed to delete: ${err}`);
+        }
+      },
+    });
   };
 
   const handleStartRename = (entry: FileEntry) => {
@@ -138,10 +175,11 @@ export function FileList() {
     }
     try {
       await renameEntry(fullPath(renamingEntry), renameValue.trim());
+
       setRenamingEntry(null);
       useFileStore.getState().refresh();
     } catch (err) {
-      alert(`Failed to rename: ${err}`);
+      showError(`Failed to rename: ${err}`);
     }
   };
 
@@ -150,9 +188,10 @@ export function FileList() {
       const dest = await save({ defaultPath: entry.name });
       if (dest) {
         await exportFile(fullPath(entry.name), dest);
+
       }
     } catch (err) {
-      alert(`Failed to export: ${err}`);
+      showError(`Failed to export: ${err}`);
     }
   };
 
@@ -192,9 +231,29 @@ export function FileList() {
         }
       }
       if (clipboard.operation === "cut") setClipboard(null);
+
       useFileStore.getState().refresh();
     } catch (err) {
-      alert(`Paste failed: ${err}`);
+      showError(`Paste failed: ${err}`);
+    } finally {
+      stopBusy();
+    }
+  };
+
+  // --- Move files to folder (via context menu) ---
+  const handleMoveToFolder = async (fileNames: string[], folderName: string) => {
+    const destDir = fullPath(folderName);
+    startBusy(`Moving ${fileNames.length} item(s) to ${folderName}...`);
+    try {
+      for (const name of fileNames) {
+        await copyEntry(fullPath(name), destDir, name);
+        await deleteEntry(fullPath(name), true);
+      }
+
+      setSelectedFiles(new Set());
+      useFileStore.getState().refresh();
+    } catch (err) {
+      showError(`Move failed: ${err}`);
     } finally {
       stopBusy();
     }
@@ -214,8 +273,74 @@ export function FileList() {
       const content = await readFile(fp);
       setFullscreenPreview({ filePath: fp, fileName: entry.name, content });
     } catch (err) {
-      alert(`Failed to preview: ${err}`);
+      showError(`Failed to preview: ${err}`);
     }
+  };
+
+  // --- Batch operations ---
+  const getSelectedEntries = (): FileEntry[] => {
+    return sorted.filter((e) => selectedFiles.has(e.name));
+  };
+
+  const handleBatchDelete = () => {
+    const selected = getSelectedEntries();
+    showConfirm({
+      title: "Delete Selected Files",
+      message: `Delete ${selected.length} item(s) permanently? This cannot be undone.`,
+      confirmLabel: "Delete All",
+      danger: true,
+      onConfirm: async () => {
+        startBusy(`Deleting ${selected.length} item(s)...`);
+        try {
+          for (const entry of selected) {
+            await deleteEntry(fullPath(entry.name), true);
+            closeTabsForPath(fullPath(entry.name));
+          }
+          useFileStore.getState().setSelectedFiles(new Set());
+          useFileStore.getState().refresh();
+        } catch (err) {
+          showError(`Failed to delete: ${err}`);
+        } finally {
+          stopBusy();
+        }
+      },
+    });
+  };
+
+  const handleBatchExport = async () => {
+    const selected = getSelectedEntries().filter((e) => !e.is_dir);
+    if (selected.length === 0) return;
+
+    if (selected.length === 1) {
+      await handleExport(selected[0]);
+      return;
+    }
+
+    // Multiple files: pick a destination folder
+    const destFolder = await openDialog({ directory: true, title: "Choose export folder" });
+    if (!destFolder) return;
+
+    startBusy(`Exporting ${selected.length} file(s)...`);
+    try {
+      for (const entry of selected) {
+        await exportFile(fullPath(entry.name), `${destFolder}/${entry.name}`);
+      }
+
+    } catch (err) {
+      showError(`Failed to export: ${err}`);
+    } finally {
+      stopBusy();
+    }
+  };
+
+  const handleBatchCopy = () => {
+    const selected = getSelectedEntries();
+    setClipboard({
+      files: selected.map((e) => fullPath(e.name)),
+      names: selected.map((e) => e.name),
+      sourceDir: currentPath,
+      operation: "copy",
+    });
   };
 
   const getContextMenuItems = (entry: FileEntry): ContextMenuItem[] => {
@@ -229,11 +354,35 @@ export function FileList() {
     if (!entry.is_dir) {
       items.push({ label: "Export to disk...", onClick: () => handleExport(entry) });
     }
+    if (!entry.is_dir) {
+      items.push({
+        label: "File Info",
+        onClick: () => {
+          setSelectedFiles(new Set([entry.name]));
+          if (!useFileStore.getState().showInfoPanel) toggleInfoPanel();
+        },
+      });
+    }
     items.push(
       { label: "Copy", onClick: () => handleCopy(entry), divider: true },
     );
     if (clipboard) {
       items.push({ label: `Paste (${clipboard.names.length} items)`, onClick: handlePaste });
+    }
+    // "Move to" flyout submenu — lists folders in current directory
+    const folders = sorted.filter((e) => e.is_dir && e.name !== entry.name);
+    if (!entry.is_dir && folders.length > 0) {
+      const targetNames = selectedFiles.size > 1 && selectedFiles.has(entry.name)
+        ? Array.from(selectedFiles)
+        : [entry.name];
+      items.push({
+        label: "Move to",
+        divider: true,
+        children: folders.map((folder) => ({
+          label: folder.name,
+          onClick: () => handleMoveToFolder(targetNames, folder.name),
+        })),
+      });
     }
     items.push(
       { label: "Rename", onClick: () => handleStartRename(entry), divider: true },
@@ -256,7 +405,7 @@ export function FileList() {
 
   if (loading) {
     return (
-      <div className="flex-1 flex items-center justify-center text-gray-500">
+      <div className="flex-1 flex items-center justify-center text-gray-500 min-w-0">
         <svg className="w-5 h-5 animate-spin mr-2" fill="none" viewBox="0 0 24 24">
           <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
           <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
@@ -268,7 +417,7 @@ export function FileList() {
 
   if (sorted.length === 0) {
     return (
-      <div className="flex-1 flex items-center justify-center text-gray-500 text-sm relative">
+      <div className="flex-1 flex items-center justify-center text-gray-500 text-sm relative min-w-0">
         {isDragOver ? (
           <DragOverlay />
         ) : (
@@ -302,29 +451,118 @@ export function FileList() {
 
   if (viewMode === "grid") {
     return (
-      <div className="flex-1 overflow-auto p-3 relative" onClick={() => setContextMenu(null)}>
-        {isDragOver && <DragOverlay />}
-        <div className="grid grid-cols-[repeat(auto-fill,minmax(100px,1fr))] gap-2">
-          {sorted.map((entry) => (
-            <button
-              key={entry.name}
-              className={`flex flex-col items-center gap-1 p-3 rounded-lg text-center transition ${
-                selectedFiles.has(entry.name)
-                  ? "bg-indigo-900/50 ring-1 ring-indigo-500"
-                  : "hover:bg-gray-800"
-              }`}
-              onClick={(e) => toggleSelection(entry.name, e.metaKey || e.ctrlKey)}
-              onDoubleClick={() => handleOpen(entry)}
-              onContextMenu={(e) => handleContextMenu(e, entry)}
-              onKeyDown={(e) => handleKeyDown(e, entry)}
-            >
-              <FileIcon isDir={entry.is_dir} size={32} name={entry.name} filePath={fullPath(entry.name)} />
-              <span className="text-xs text-gray-300 truncate w-full">
-                {renamingEntry === entry.name ? renderName(entry) : entry.name}
-              </span>
-            </button>
-          ))}
+      <div className="flex-1 flex flex-col overflow-hidden relative min-w-0">
+        {selectedFiles.size > 1 && (
+          <BatchActionBar
+            count={selectedFiles.size}
+            onExport={handleBatchExport}
+            onDelete={handleBatchDelete}
+            onCopy={handleBatchCopy}
+          />
+        )}
+        <div className="flex-1 overflow-auto p-3" onClick={() => setContextMenu(null)}>
+          {isDragOver && <DragOverlay />}
+          <div className="grid grid-cols-[repeat(auto-fill,minmax(100px,1fr))] gap-2">
+            {sorted.map((entry) => (
+              <button
+                key={entry.name}
+                className={`flex flex-col items-center gap-1 p-3 rounded-lg text-center transition ${
+                  selectedFiles.has(entry.name)
+                    ? "bg-indigo-900/50 ring-1 ring-indigo-500"
+                    : "hover:bg-gray-800"
+                }`}
+                onClick={(e) => toggleSelection(entry.name, e.metaKey || e.ctrlKey)}
+                onDoubleClick={() => handleOpen(entry)}
+                onContextMenu={(e) => handleContextMenu(e, entry)}
+                onKeyDown={(e) => handleKeyDown(e, entry)}
+              >
+                <FileIcon isDir={entry.is_dir} size={32} name={entry.name} filePath={fullPath(entry.name)} />
+                <span className="text-xs text-gray-300 truncate w-full">
+                  {renamingEntry === entry.name ? renderName(entry) : entry.name}
+                </span>
+              </button>
+            ))}
+          </div>
+          {contextMenu && (
+            <ContextMenu
+              x={contextMenu.x}
+              y={contextMenu.y}
+              items={getContextMenuItems(contextMenu.entry)}
+              onClose={() => setContextMenu(null)}
+            />
+          )}
         </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex-1 flex flex-col overflow-hidden relative min-w-0">
+      {selectedFiles.size > 1 && (
+        <BatchActionBar
+          count={selectedFiles.size}
+          onExport={handleBatchExport}
+          onDelete={handleBatchDelete}
+          onCopy={handleBatchCopy}
+        />
+      )}
+      <div className="flex-1 overflow-auto" onClick={() => setContextMenu(null)}>
+        {isDragOver && <DragOverlay />}
+        <table className="w-full text-xs table-fixed">
+          <thead className="sticky top-0 bg-gray-900 z-10">
+            <tr className="text-gray-400 text-left">
+              <th className="py-1.5 px-3 font-medium cursor-pointer hover:text-white truncate" onClick={() => setSortBy("name")}>
+                Name {sortBy === "name" && (sortAsc ? "\u2191" : "\u2193")}
+              </th>
+              <th className="py-1.5 px-3 font-medium cursor-pointer hover:text-white w-24" onClick={() => setSortBy("size")}>
+                Size {sortBy === "size" && (sortAsc ? "\u2191" : "\u2193")}
+              </th>
+              <th className="py-1.5 px-3 font-medium cursor-pointer hover:text-white w-44" onClick={() => setSortBy("modified")}>
+                Modified {sortBy === "modified" && (sortAsc ? "\u2191" : "\u2193")}
+              </th>
+              <th className="py-1.5 px-3 w-16" />
+            </tr>
+          </thead>
+          <tbody>
+            {sorted.map((entry) => (
+              <tr
+                key={entry.name}
+                className={`cursor-pointer border-b border-gray-800/50 ${
+                  selectedFiles.has(entry.name)
+                    ? "bg-indigo-900/30"
+                    : "hover:bg-gray-800/50"
+                }`}
+                onClick={(e) => toggleSelection(entry.name, e.metaKey || e.ctrlKey)}
+                onDoubleClick={() => handleOpen(entry)}
+                onContextMenu={(e) => handleContextMenu(e, entry)}
+                onKeyDown={(e) => handleKeyDown(e, entry)}
+                tabIndex={0}
+              >
+                <td className="py-1.5 px-3 truncate">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <FileIcon isDir={entry.is_dir} size={16} name={entry.name} filePath={fullPath(entry.name)} />
+                    <div className="truncate">{renderName(entry)}</div>
+                  </div>
+                </td>
+                <td className="py-1.5 px-3 text-[11px] text-gray-500">
+                  {entry.is_dir ? "--" : formatFileSize(entry.size)}
+                </td>
+                <td className="py-1.5 px-3 text-[11px] text-gray-500">
+                  {formatDate(entry.modified)}
+                </td>
+                <td className="py-1.5 px-3">
+                  <button
+                    onClick={(e) => { e.stopPropagation(); handleDelete(entry); }}
+                    className="text-gray-600 hover:text-red-400 p-1 rounded hover:bg-gray-800"
+                    title="Delete"
+                  >
+                    <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
+                  </button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
         {contextMenu && (
           <ContextMenu
             x={contextMenu.x}
@@ -334,75 +572,51 @@ export function FileList() {
           />
         )}
       </div>
-    );
-  }
+    </div>
+  );
+}
 
+function BatchActionBar({ count, onExport, onDelete, onCopy }: {
+  count: number;
+  onExport: () => void;
+  onDelete: () => void;
+  onCopy: () => void;
+}) {
   return (
-    <div className="flex-1 overflow-auto relative" onClick={() => setContextMenu(null)}>
-      {isDragOver && <DragOverlay />}
-      <table className="w-full text-xs">
-        <thead className="sticky top-0 bg-gray-900 z-10">
-          <tr className="text-gray-400 text-left">
-            <th className="py-1.5 px-3 font-medium cursor-pointer hover:text-white" onClick={() => setSortBy("name")}>
-              Name {sortBy === "name" && (sortAsc ? "\u2191" : "\u2193")}
-            </th>
-            <th className="py-1.5 px-3 font-medium cursor-pointer hover:text-white w-24" onClick={() => setSortBy("size")}>
-              Size {sortBy === "size" && (sortAsc ? "\u2191" : "\u2193")}
-            </th>
-            <th className="py-1.5 px-3 font-medium cursor-pointer hover:text-white w-44" onClick={() => setSortBy("modified")}>
-              Modified {sortBy === "modified" && (sortAsc ? "\u2191" : "\u2193")}
-            </th>
-            <th className="py-1.5 px-3 w-16" />
-          </tr>
-        </thead>
-        <tbody>
-          {sorted.map((entry) => (
-            <tr
-              key={entry.name}
-              className={`cursor-pointer border-b border-gray-800/50 ${
-                selectedFiles.has(entry.name)
-                  ? "bg-indigo-900/30"
-                  : "hover:bg-gray-800/50"
-              }`}
-              onClick={(e) => toggleSelection(entry.name, e.metaKey || e.ctrlKey)}
-              onDoubleClick={() => handleOpen(entry)}
-              onContextMenu={(e) => handleContextMenu(e, entry)}
-              onKeyDown={(e) => handleKeyDown(e, entry)}
-              tabIndex={0}
-            >
-              <td className="py-1.5 px-3">
-                <div className="flex items-center gap-2">
-                  <FileIcon isDir={entry.is_dir} size={16} name={entry.name} filePath={fullPath(entry.name)} />
-                  {renderName(entry)}
-                </div>
-              </td>
-              <td className="py-1.5 px-3 text-[11px] text-gray-500">
-                {entry.is_dir ? "--" : formatFileSize(entry.size)}
-              </td>
-              <td className="py-1.5 px-3 text-[11px] text-gray-500">
-                {formatDate(entry.modified)}
-              </td>
-              <td className="py-1.5 px-3">
-                <button
-                  onClick={(e) => { e.stopPropagation(); handleDelete(entry); }}
-                  className="text-gray-600 hover:text-red-400 p-1 rounded hover:bg-gray-800"
-                  title="Delete"
-                >
-                  <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
-                </button>
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-      {contextMenu && (
-        <ContextMenu
-          x={contextMenu.x}
-          y={contextMenu.y}
-          items={getContextMenuItems(contextMenu.entry)}
-          onClose={() => setContextMenu(null)}
-        />
-      )}
+    <div className="flex items-center gap-3 px-3 py-2 bg-indigo-950/60 border-b border-indigo-800/50">
+      <span className="text-xs text-indigo-300 font-medium">{count} items selected</span>
+      <div className="flex gap-1.5 ml-auto">
+        <button
+          onClick={onExport}
+          className="flex items-center gap-1.5 px-2.5 py-1 text-xs text-gray-300 bg-gray-800 hover:bg-gray-700 rounded-md transition"
+          title="Export selected files"
+        >
+          <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+          </svg>
+          Export All
+        </button>
+        <button
+          onClick={onCopy}
+          className="flex items-center gap-1.5 px-2.5 py-1 text-xs text-gray-300 bg-gray-800 hover:bg-gray-700 rounded-md transition"
+          title="Copy selected files to clipboard"
+        >
+          <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+          </svg>
+          Copy All
+        </button>
+        <button
+          onClick={onDelete}
+          className="flex items-center gap-1.5 px-2.5 py-1 text-xs text-red-400 bg-red-950/50 hover:bg-red-900/50 rounded-md transition"
+          title="Delete selected files"
+        >
+          <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+          </svg>
+          Delete All
+        </button>
+      </div>
     </div>
   );
 }
@@ -423,6 +637,13 @@ function DragOverlay() {
 
 const IMAGE_EXTS = new Set(["png", "jpg", "jpeg", "gif", "webp", "svg", "bmp", "ico", "avif"]);
 const VIDEO_EXTS = new Set(["mp4", "m4v", "mov", "webm", "ogg", "ogv", "avi", "mkv", "3gp", "ts"]);
+const CODE_EXTS = new Set(["js", "ts", "jsx", "tsx", "py", "rs", "go", "java", "c", "cpp", "rb", "php", "swift", "kt", "scala"]);
+const TEXT_EXTS = new Set(["txt", "md", "log", "doc", "rtf"]);
+const CONFIG_EXTS = new Set(["json", "yml", "yaml", "xml", "toml", "ini", "cfg", "conf", "env", "csv"]);
+const MARKUP_EXTS = new Set(["html", "css", "scss", "vue", "svelte"]);
+const AUDIO_EXTS = new Set(["mp3", "wav", "ogg", "m4a", "flac", "aac"]);
+const ARCHIVE_EXTS = new Set(["zip", "tar", "gz", "rar", "7z", "bz2", "xz"]);
+const SHELL_EXTS = new Set(["sh", "bash", "zsh", "fish", "bat", "ps1"]);
 
 function FileIcon({ isDir, size, name, filePath }: { isDir: boolean; size: number; name: string; filePath?: string }) {
   const s = size === 32 ? "w-8 h-8" : "w-4 h-4 shrink-0";
@@ -463,6 +684,84 @@ function FileIcon({ isDir, size, name, filePath }: { isDir: boolean; size: numbe
     );
   }
 
+  // Code files — angle brackets with slash icon
+  if (CODE_EXTS.has(ext)) {
+    return (
+      <svg className={`${s} text-blue-400`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M8 16L4 12l4-4m8 8l4-4-4-4m-5-2l2 16" />
+      </svg>
+    );
+  }
+
+  // Text/docs — document with text lines icon
+  if (TEXT_EXTS.has(ext)) {
+    return (
+      <svg className={`${s} text-gray-400`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z" />
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 13h6m-6 4h4m-4-8h2" />
+      </svg>
+    );
+  }
+
+  // Config/data — cog/settings icon
+  if (CONFIG_EXTS.has(ext)) {
+    return (
+      <svg className={`${s} text-amber-400`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.573-1.066z" />
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+      </svg>
+    );
+  }
+
+  // Markup — globe icon
+  if (MARKUP_EXTS.has(ext)) {
+    return (
+      <svg className={`${s} text-orange-400`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9m-9 9a9 9 0 019-9" />
+      </svg>
+    );
+  }
+
+  // PDF — document with "PDF" label
+  if (ext === "pdf") {
+    return (
+      <svg className={`${s} text-red-400`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z" />
+        <text x="12" y="16" textAnchor="middle" fill="currentColor" stroke="none" fontSize="7" fontWeight="bold" fontFamily="sans-serif">PDF</text>
+      </svg>
+    );
+  }
+
+  // Audio — music note icon
+  if (AUDIO_EXTS.has(ext)) {
+    return (
+      <svg className={`${s} text-pink-400`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 19V6l12-3v13" />
+        <circle cx="6" cy="19" r="3" strokeWidth={1.5} fill="none" />
+        <circle cx="18" cy="16" r="3" strokeWidth={1.5} fill="none" />
+      </svg>
+    );
+  }
+
+  // Archive — archive box icon
+  if (ARCHIVE_EXTS.has(ext)) {
+    return (
+      <svg className={`${s} text-yellow-400`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M5 8h14M5 8a2 2 0 01-2-2V5a2 2 0 012-2h14a2 2 0 012 2v1a2 2 0 01-2 2M5 8v10a2 2 0 002 2h10a2 2 0 002-2V8m-9 4h4" />
+      </svg>
+    );
+  }
+
+  // Shell/scripts — terminal icon
+  if (SHELL_EXTS.has(ext)) {
+    return (
+      <svg className={`${s} text-green-400`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+      </svg>
+    );
+  }
+
+  // Default generic file icon
   return (
     <svg className={`${s} text-gray-500`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z" />

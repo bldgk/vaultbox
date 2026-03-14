@@ -1,9 +1,10 @@
 [package]
 name = "vaultbox"
-version = "1.1.0"
+version = "1.2.0"
 description = "VaultBox - gocryptfs vault browser"
 authors = ["you"]
 edition = "2021"
+default-run = "vaultbox"
 
 [lib]
 name = "vaultbox_lib"
@@ -50,6 +51,9 @@ tokio = { version = "1", features = ["full"] }
 lru = "0.14"
 urlencoding = "2"
 arboard = "3"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = ["Win32_System_Memory"] }
 
 # Native UI (optional, enabled with --features native)
 eframe = { version = "0.31", default-features = false, features = ["default_fonts", "glow", "persistence"], optional = true }

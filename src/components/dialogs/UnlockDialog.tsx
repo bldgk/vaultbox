@@ -42,6 +42,22 @@ export function UnlockDialog() {
   const [mode, setMode] = useState<"open" | "create">("open");
   const [path, setPath] = useState("");
   const securePassword = useSecurePassword();
+  const [passwordStrength, setPasswordStrength] = useState(0);
+
+  const handlePasswordChange = (value: string) => {
+    securePassword.handleChange(value);
+    if (mode === "create") {
+      let score = 0;
+      if (value.length >= 8) score++;
+      if (value.length >= 16) score++;
+      if (/[a-z]/.test(value) && /[A-Z]/.test(value)) score++;
+      if (/\d/.test(value)) score++;
+      if (/[^a-zA-Z0-9]/.test(value)) score++;
+      setPasswordStrength(value.length === 0 ? 0 : score);
+    } else {
+      setPasswordStrength(0);
+    }
+  };
   const [configPath, setConfigPath] = useState("");
   const [useExternalConfig, setUseExternalConfig] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -228,10 +244,24 @@ export function UnlockDialog() {
             <label className="block text-sm text-gray-400 mb-1">Password</label>
             <input
               type="password"
-              onChange={(e) => securePassword.handleChange(e.target.value)}
+              onChange={(e) => handlePasswordChange(e.target.value)}
               placeholder="Enter vault password"
               className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-white text-sm placeholder-gray-500 focus:outline-none focus:border-indigo-500"
             />
+            {mode === "create" && securePassword.hasValue && (() => {
+              const strengthLabel = passwordStrength <= 1 ? "Weak" : passwordStrength === 2 ? "Fair" : passwordStrength === 3 ? "Good" : "Strong";
+              const strengthColor = passwordStrength <= 1 ? "bg-red-500" : passwordStrength === 2 ? "bg-orange-500" : passwordStrength === 3 ? "bg-yellow-500" : "bg-green-500";
+              const strengthTextColor = passwordStrength <= 1 ? "text-red-500" : passwordStrength === 2 ? "text-orange-500" : passwordStrength === 3 ? "text-yellow-500" : "text-green-500";
+              const strengthWidth = passwordStrength <= 1 ? "w-1/4" : passwordStrength === 2 ? "w-2/4" : passwordStrength === 3 ? "w-3/4" : "w-full";
+              return (
+                <div className="mt-2">
+                  <div className="w-full h-1 bg-gray-700 rounded-full overflow-hidden">
+                    <div className={`h-1 ${strengthColor} ${strengthWidth} rounded-full transition-all duration-300`} />
+                  </div>
+                  <p className={`text-xs mt-1 ${strengthTextColor}`}>{strengthLabel}</p>
+                </div>
+              );
+            })()}
           </div>
 
           {mode === "open" && (

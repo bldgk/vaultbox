@@ -10,7 +10,7 @@ interface TreeNode {
 }
 
 export function FileTree() {
-  const { currentPath, navigateTo } = useFileStore();
+  const { currentPath, navigateTo, refreshCounter } = useFileStore();
   const [rootChildren, setRootChildren] = useState<TreeNode[]>([]);
 
   const loadChildren = useCallback(async (path: string): Promise<TreeNode[]> => {
@@ -29,9 +29,21 @@ export function FileTree() {
     }
   }, []);
 
+  // Load root on mount; on refresh, only update the list without resetting expanded state
   useEffect(() => {
     loadChildren("").then(setRootChildren);
   }, [loadChildren]);
+
+  // On refresh, re-fetch root folder list and merge (preserve nodes that still exist)
+  useEffect(() => {
+    if (refreshCounter === 0) return;
+    loadChildren("").then((fresh) => {
+      setRootChildren((prev) => {
+        const prevMap = new Map(prev.map((n) => [n.path, n]));
+        return fresh.map((n) => prevMap.get(n.path) ?? n);
+      });
+    });
+  }, [refreshCounter, loadChildren]);
 
   return (
     <div className="w-56 bg-gray-900 border-r border-gray-800 overflow-y-auto text-sm shrink-0">
@@ -98,7 +110,8 @@ function TreeNodeComponent({
         onClick={() => navigateTo(node.path)}
         onDoubleClick={handleToggle}
       >
-        <button
+        <span
+          role="button"
           onClick={(e) => { e.stopPropagation(); handleToggle(); }}
           className="p-0.5 -ml-1 hover:bg-gray-700 rounded"
         >
@@ -109,7 +122,7 @@ function TreeNodeComponent({
           >
             <path d="M9 5l7 7-7 7" />
           </svg>
-        </button>
+        </span>
         <svg className="w-4 h-4 text-indigo-400 shrink-0" fill="currentColor" viewBox="0 0 24 24">
           <path d="M10 4H4a2 2 0 00-2 2v12a2 2 0 002 2h16a2 2 0 002-2V8a2 2 0 00-2-2h-8l-2-2z" />
         </svg>

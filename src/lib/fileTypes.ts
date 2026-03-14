@@ -1,4 +1,4 @@
-export type ViewerType = "text" | "image" | "pdf" | "media" | "hex";
+export type ViewerType = "text" | "image" | "pdf" | "media" | "hex" | "archive";
 
 const TEXT_EXTENSIONS = new Set([
   "txt", "md", "json", "yml", "yaml", "csv", "log", "xml", "html", "css",
@@ -19,12 +19,15 @@ const MEDIA_EXTENSIONS = new Set([
   "aac", "avi", "mkv", "3gp", "ts",
 ]);
 
+const ARCHIVE_EXTENSIONS = new Set(["zip"]);
+
 export function getViewerType(filename: string): ViewerType {
   const ext = filename.split(".").pop()?.toLowerCase() ?? "";
   if (TEXT_EXTENSIONS.has(ext)) return "text";
   if (IMAGE_EXTENSIONS.has(ext)) return "image";
   if (PDF_EXTENSIONS.has(ext)) return "pdf";
   if (MEDIA_EXTENSIONS.has(ext)) return "media";
+  if (ARCHIVE_EXTENSIONS.has(ext)) return "archive";
   return "hex";
 }
 

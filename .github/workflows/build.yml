@@ -8,6 +8,9 @@ on:
     branches: [main]
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   build:
     strategy:
@@ -63,17 +66,42 @@ jobs:
           releaseBody: |
             A desktop app for browsing gocryptfs-encrypted vaults without mounting them. All decryption happens in-process with zero plaintext on disk.
 
-            ## Features
+            ## What's New in v1.2.0
 
-            - **Vault management** — Open, create, and lock gocryptfs v2 vaults with secure password handling
-            - **File operations** — Browse, create, rename, delete, search, import, and export encrypted files
-            - **Text editor** — CodeMirror 6 with syntax highlighting for 11+ languages
-            - **Image viewer** — Blob-rendered previews with fullscreen mode
-            - **Media player** — Streaming video/audio via custom `vaultmedia://` protocol with HTTP Range support for seeking
-            - **Hex viewer** — Binary file inspection with offset/hex/ASCII display
-            - **Clipboard** — Copy decrypted content with auto-clear after timeout
-            - **Streaming decryption** — On-demand block decryption for large files (>10 MB) without loading into RAM
-            - **Security** — mlock'd XOR-masked keys, zeroized memory, auto-lock after inactivity, no unsafe-eval CSP
+            ### Viewers
+            - **PDF viewer** — Render PDFs with pdfjs-dist: zoom, fit-width/fit-page, page navigation, scroll tracking, Ctrl+wheel zoom
+            - **Archive viewer** — Browse .zip contents with tree view, file sizes, dates. Extract individual files to vault or disk, or extract all at once
+            - **Markdown preview** — Live split-view rendered preview for .md files with toggle button
+            - **Split view** — Side-by-side file comparison: click the split button, then Alt+click a tab to open in the right pane
+
+            ### UI Improvements
+            - **File type icons** — Unique colored SVG icons for code, config, markup, audio, archive, shell, PDF, and text files
+            - **Image gallery** — Thumbnail strip in fullscreen viewer with auto-scroll, Home/End key navigation
+            - **Tab reorder** — Drag tabs to rearrange (pointer-based, no conflict with OS drag-drop)
+            - **Batch operations** — Multi-select files for Export All, Copy All, Delete All
+            - **Move to folder** — Right-click context menu with flyout submenu listing target folders
+            - **File info panel** — Right sidebar with file details (Cmd+I to toggle)
+            - **Confirm dialogs** — Custom modal dialogs replacing browser confirm/alert
+            - **Password strength** — Visual strength meter when creating a new vault
+
+            ### Keyboard Shortcuts
+            - **Cmd+N** — Instantly create untitled.txt in current directory
+            - **Cmd+Shift+N** — Open new folder dialog
+
+            ### Bug Fixes & Polish
+            - File tree updates on folder create/delete without losing expanded state
+            - Open tabs auto-close when their file is deleted
+            - Table layout stays compact when viewer panel is open
+            - Duplicate Tauri drop events no longer cause import errors
+            - XSS hardened: markdown links restricted to http/https/mailto only
+            - Windows build: added windows-sys dependency for VirtualLock/VirtualUnlock
+
+            ### Security
+            - All vault content rendered as text (CodeMirror) or via `<img>` tags — no script execution
+            - SVG scripts blocked (rendered in `<img>`, not `<iframe>`)
+            - Markdown `javascript:` protocol links stripped
+            - PDF.js does not execute embedded JavaScript
+            - Zero plaintext on disk, mlock'd keys, auto-lock, zeroized memory on lock
 
             ## Platforms
 

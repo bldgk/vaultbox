@@ -1,0 +1,4 @@
+<script>alert('txt-xss')</script>
+<img src=x onerror="alert('txt-img-xss')">
+${document.cookie}
+{{constructor.constructor('alert(1)')()}}

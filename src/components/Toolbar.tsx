@@ -1,25 +1,30 @@
 import { useState, useEffect } from "react";
 import { useFileStore } from "../store/fileStore";
 import { useVaultStore } from "../store/vaultStore";
+import { useDialogStore } from "../store/dialogStore";
 import { lockVault, createFile, createDir, searchFiles, importFiles } from "../hooks/useTauriCommands";
 import { open } from "@tauri-apps/plugin-dialog";
 
 export function Toolbar() {
   const { currentPath, goBack, goForward, historyIndex, navigationHistory, viewMode, setViewMode, searchQuery, setSearchQuery, setSearchResults } = useFileStore();
   const { setLocked } = useVaultStore();
+  const { showConfirm } = useDialogStore();
+  const showError = (msg: string) => {
+    showConfirm({ title: "Error", message: msg, confirmLabel: "OK", onConfirm: () => {} });
+  };
   const [showNewMenu, setShowNewMenu] = useState(false);
   const [newName, setNewName] = useState("");
   const [newType, setNewType] = useState<"file" | "folder" | null>(null);
 
-  // Listen for Cmd+N keyboard shortcut
+  // Listen for Cmd+Shift+N keyboard shortcut (new folder dialog)
   useEffect(() => {
     const handler = () => {
-      setNewType("file");
+      setNewType("folder");
       setShowNewMenu(false);
       setNewName("");
     };
-    window.addEventListener("vault:new-file", handler);
-    return () => window.removeEventListener("vault:new-file", handler);
+    window.addEventListener("vault:new-folder", handler);
+    return () => window.removeEventListener("vault:new-folder", handler);
   }, []);
 
   const handleLock = async () => {
@@ -46,7 +51,7 @@ export function Toolbar() {
       setNewName("");
       useFileStore.getState().refresh();
     } catch (err) {
-      alert(String(err));
+      showError(String(err));
     }
   };
 
@@ -111,7 +116,7 @@ export function Toolbar() {
               await importFiles(paths as string[], currentPath);
               useFileStore.getState().refresh();
             } catch (err) {
-              alert(String(err));
+              showError(String(err));
             } finally {
               useFileStore.getState().stopBusy();
             }

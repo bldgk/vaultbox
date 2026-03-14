@@ -17,17 +17,7 @@ A desktop application for browsing gocryptfs-encrypted vaults without mounting t
 
 ## Security Model
 
-VaultBox is designed to keep decrypted data isolated to a single process, unlike gocryptfs FUSE mounts which expose plaintext to all processes via the filesystem.
-
-### Comparison with gocryptfs mount
-
-| | gocryptfs FUSE mount | VaultBox |
-|---|---|---|
-| Plaintext access | Any process can `open("/mnt/vault/file")` | Only VaultBox process has decrypted data |
-| Malware with user privileges | Reads vault files like normal files | macOS/Linux: blocked by OS; Windows: needs `ReadProcessMemory` |
-| Kernel page cache | Decrypted pages cached by kernel | No kernel cache — decryption in userspace only |
-| Visibility | Mount point visible via `mount`, `df` | No mount point, no filesystem exposure |
-| Use from other apps | Any app (Word, Photoshop, etc.) | Built-in viewers only; export required for external apps |
+VaultBox is designed to keep decrypted data isolated to a single process. Only VaultBox process has decrypted data, macOS/Linux: blocked by OS; Windows: needs `ReadProcessMemory`. No kernel cache — decryption in userspace only, No mount point, no filesystem exposure. Built-in viewers only; export required for external apps
 
 ### Memory protection
 

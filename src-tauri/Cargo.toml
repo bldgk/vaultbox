@@ -1,6 +1,6 @@
 [package]
 name = "vaultbox"
-version = "0.1.0"
+version = "1.1.0"
 description = "VaultBox - gocryptfs vault browser"
 authors = ["you"]
 edition = "2021"
@@ -9,10 +9,15 @@ edition = "2021"
 name = "vaultbox_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
+[features]
+default = []
+native = ["eframe", "egui", "egui_extras", "image", "rfd"]
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
+# Tauri (only used without "native" feature, but always compiled for lib)
 tauri = { version = "2", features = [] }
 tauri-plugin-dialog = "2"
 serde = { version = "1", features = ["derive"] }
@@ -46,5 +51,21 @@ lru = "0.14"
 urlencoding = "2"
 arboard = "3"
 
+# Native UI (optional, enabled with --features native)
+eframe = { version = "0.31", default-features = false, features = ["default_fonts", "glow", "persistence"], optional = true }
+egui = { version = "0.31", optional = true }
+egui_extras = { version = "0.31", features = ["image"], optional = true }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp", "bmp"], optional = true }
+rfd = { version = "0.15", optional = true }
+
 [dev-dependencies]
 tempfile = "3"
+
+[[bin]]
+name = "vaultbox"
+path = "src/main.rs"
+
+[[bin]]
+name = "vaultbox-native"
+path = "src/native_main.rs"
+required-features = ["native"]

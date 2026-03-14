@@ -56,6 +56,8 @@ export function TextEditor({ tabIndex }: { tabIndex: number }) {
 
   const handleSave = useCallback(async () => {
     if (!tabRef.current || !viewRef.current) return;
+    const { startBusy, stopBusy } = useFileStore.getState();
+    startBusy(`Saving ${tabRef.current.name}...`);
     const text = viewRef.current.state.doc.toString();
     try {
       const encoder = new TextEncoder();
@@ -65,6 +67,8 @@ export function TextEditor({ tabIndex }: { tabIndex: number }) {
       updateTabContent(tabIndex, { type: "Text", data: text });
     } catch (err) {
       alert(`Failed to save: ${err}`);
+    } finally {
+      stopBusy();
     }
   }, [tabIndex, markTabModified, updateTabContent]);
 

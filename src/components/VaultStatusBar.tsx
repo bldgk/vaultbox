@@ -4,7 +4,7 @@ import { useFileStore } from "../store/fileStore";
 
 export function VaultStatusBar() {
   const { vaultInfo } = useVaultStore();
-  const { entries, openTabs, clipboard, busyCount } = useFileStore();
+  const { entries, openTabs, clipboard, busyCount, statusText } = useFileStore();
   const [idleTime, setIdleTime] = useState(0);
 
   useEffect(() => {
@@ -32,7 +32,7 @@ export function VaultStatusBar() {
     <div className="flex items-center gap-4 px-3 py-1 bg-gray-900 border-t border-gray-800 text-xs text-gray-500">
       <span className="flex items-center gap-1.5">
         <span className={`w-1.5 h-1.5 rounded-full ${isBusy ? "bg-amber-400 animate-pulse" : "bg-green-500"}`} />
-        {isBusy ? "Working..." : "Unlocked"}
+        {isBusy ? (statusText || "Working...") : "Unlocked"}
       </span>
       {vaultInfo && (
         <span className="truncate max-w-[300px]" title={vaultInfo.path}>

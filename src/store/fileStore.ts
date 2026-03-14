@@ -37,6 +37,7 @@ interface FileStore {
   searchResults: FileEntry[] | null;
   loading: boolean;
   busyCount: number;
+  statusText: string;
   clipboard: ClipboardState | null;
   fullscreenPreview: FullscreenPreview | null;
 
@@ -58,8 +59,9 @@ interface FileStore {
   setSearchQuery: (query: string) => void;
   setSearchResults: (results: FileEntry[] | null) => void;
   setLoading: (loading: boolean) => void;
-  startBusy: () => void;
+  startBusy: (status?: string) => void;
   stopBusy: () => void;
+  setStatusText: (text: string) => void;
   setClipboard: (clipboard: ClipboardState | null) => void;
   setFullscreenPreview: (preview: FullscreenPreview | null) => void;
   reset: () => void;
@@ -81,6 +83,7 @@ export const useFileStore = create<FileStore>((set) => ({
   searchResults: null,
   loading: false,
   busyCount: 0,
+  statusText: "",
   clipboard: null,
   fullscreenPreview: null,
 
@@ -190,8 +193,9 @@ export const useFileStore = create<FileStore>((set) => ({
   setSearchQuery: (query) => set({ searchQuery: query }),
   setSearchResults: (results) => set({ searchResults: results }),
   setLoading: (loading) => set({ loading }),
-  startBusy: () => set((state) => ({ busyCount: state.busyCount + 1 })),
-  stopBusy: () => set((state) => ({ busyCount: Math.max(0, state.busyCount - 1) })),
+  startBusy: (status) => set((state) => ({ busyCount: state.busyCount + 1, statusText: status || "Working..." })),
+  stopBusy: () => set((state) => ({ busyCount: Math.max(0, state.busyCount - 1), statusText: state.busyCount <= 1 ? "" : state.statusText })),
+  setStatusText: (text) => set({ statusText: text }),
   setClipboard: (clipboard) => set({ clipboard }),
   setFullscreenPreview: (preview) => set({ fullscreenPreview: preview }),
 
@@ -209,6 +213,7 @@ export const useFileStore = create<FileStore>((set) => ({
       searchResults: null,
       loading: false,
       busyCount: 0,
+      statusText: "",
       clipboard: null,
       fullscreenPreview: null,
     }),

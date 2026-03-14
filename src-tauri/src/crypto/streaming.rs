@@ -8,20 +8,23 @@ use std::path::Path;
 use super::content::{
     self, BLOCK_SIZE_CIPHER, BLOCK_SIZE_PLAIN, FILE_ID_LEN, HEADER_LEN,
 };
+use aes::Aes256;
 use aes_gcm::{
-    aead::{Aead, KeyInit, Payload},
-    Aes256Gcm, Nonce,
+    aead::{Aead, KeyInit, Payload, consts::U16},
+    AesGcm, Nonce,
 };
 use lru::LruCache;
 use std::num::NonZeroUsize;
 use zeroize::{Zeroize, Zeroizing};
+
+type Aes256Gcm16 = AesGcm<Aes256, U16>;
 
 const DEFAULT_CACHE_SIZE: usize = 256; // ~1 MB cache (256 * 4096)
 
 pub struct StreamingReader {
     file: File,
     file_id: [u8; FILE_ID_LEN],
-    cipher: Aes256Gcm,
+    cipher: Aes256Gcm16,
     position: u64,
     plaintext_size: u64,
     cache: LruCache<u64, Zeroizing<Vec<u8>>>,
@@ -42,7 +45,7 @@ impl StreamingReader {
         let file_id = content::parse_header(&header)
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.to_string()))?;
 
-        let cipher = Aes256Gcm::new_from_slice(key)
+        let cipher = Aes256Gcm16::new_from_slice(key)
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.to_string()))?;
 
         let plaintext_size = content::plaintext_size(file_size);
@@ -74,17 +77,21 @@ impl StreamingReader {
         }
         block_buf.truncate(bytes_read);
 
-        // Construct nonce
-        let mut nonce_buf = self.file_id;
-        let bn_bytes = block_num.to_be_bytes();
-        for i in 0..8 {
-            nonce_buf[8 + i] ^= bn_bytes[i];
+        // Each block starts with a 16-byte random IV
+        if block_buf.len() < 16 {
+            block_buf.zeroize();
+            return Err(io::Error::new(io::ErrorKind::InvalidData, "Block too short"));
         }
-        let nonce = Nonce::from_slice(&nonce_buf[..12]);
-        let aad = block_num.to_be_bytes();
+        let nonce = Nonce::from_slice(&block_buf[..16]);
+        let ciphertext_and_tag = &block_buf[16..];
+
+        // AAD = blockNo(8 BE) + fileID(16)
+        let mut aad = Vec::with_capacity(24);
+        aad.extend_from_slice(&block_num.to_be_bytes());
+        aad.extend_from_slice(&self.file_id);
 
         let payload = Payload {
-            msg: &block_buf,
+            msg: ciphertext_and_tag,
             aad: &aad,
         };
 

@@ -17,18 +17,24 @@
 //! - Block nonce: take fileID (16 bytes), XOR the block number into the last 8 bytes (big-endian),
 //!   then use the first 12 bytes as the GCM nonce.
 
+use aes::Aes256;
 use aes_gcm::{
-    aead::{Aead, KeyInit, Payload},
-    Aes256Gcm, Nonce,
+    aead::{Aead, KeyInit, Payload, consts::U16},
+    AesGcm, Nonce,
 };
 use thiserror::Error;
 use zeroize::{Zeroize, Zeroizing};
+
+/// GCM with 16-byte nonce (GCMIV128)
+type Aes256Gcm16 = AesGcm<Aes256, U16>;
+
 pub const HEADER_LEN: usize = 18;
 pub const FILE_ID_LEN: usize = 16;
 pub const BLOCK_SIZE_PLAIN: usize = 4096;
-pub const BLOCK_SIZE_CIPHER: usize = 4096 + 16; // plaintext + GCM tag
+/// Cipher block = IV(16) + ciphertext(4096) + GCM tag(16) = 4128
+pub const BLOCK_SIZE_CIPHER: usize = 16 + 4096 + 16; // IV + plaintext + GCM tag
 const VERSION_BYTES: [u8; 2] = [0x00, 0x02];
-const NONCE_LEN: usize = 12;
+const IV_LEN: usize = 16;
 
 #[derive(Debug, Error)]
 pub enum ContentError {
@@ -71,30 +77,22 @@ pub fn create_header() -> ([u8; HEADER_LEN], [u8; FILE_ID_LEN]) {
     (header, file_id)
 }
 
-/// Construct the GCM nonce for a given block number.
-/// Takes the 16-byte file ID, XORs the block number into bytes 8..16 (big-endian),
-/// then uses bytes 0..12 as the nonce.
-fn block_nonce(file_id: &[u8; FILE_ID_LEN], block_num: u64) -> [u8; NONCE_LEN] {
-    let mut buf = *file_id;
-    let bn_bytes = block_num.to_be_bytes();
-    // XOR block number into the last 8 bytes of the file ID
-    for i in 0..8 {
-        buf[8 + i] ^= bn_bytes[i];
-    }
-    let mut nonce = [0u8; NONCE_LEN];
-    nonce.copy_from_slice(&buf[..NONCE_LEN]);
-    nonce
-}
-
 /// Construct the AAD (additional authenticated data) for a block.
-/// It's the block number as big-endian u64.
-fn block_aad(block_num: u64) -> [u8; 8] {
-    block_num.to_be_bytes()
+/// gocryptfs format: blockNo (8 bytes big-endian) + fileID (16 bytes) = 24 bytes.
+/// When fileID is None (e.g. for master key wrapping), AAD is just the block number.
+fn block_aad(block_num: u64, file_id: &[u8; FILE_ID_LEN]) -> Vec<u8> {
+    let mut aad = Vec::with_capacity(8 + FILE_ID_LEN);
+    aad.extend_from_slice(&block_num.to_be_bytes());
+    aad.extend_from_slice(file_id);
+    aad
 }
 
 /// Decrypt an entire encrypted file's content.
 /// `data` is the full file bytes (including header).
 /// Returns the decrypted plaintext wrapped in Zeroizing for automatic zeroization on drop.
+///
+/// gocryptfs block format: each cipher block = IV(16) + ciphertext + tag(16).
+/// AAD = blockNo(8 bytes BE) + fileID(16 bytes).
 pub fn decrypt_file(key: &[u8; 32], data: &[u8]) -> Result<Zeroizing<Vec<u8>>, ContentError> {
     if data.len() < HEADER_LEN {
         if data.is_empty() {
@@ -111,7 +109,7 @@ pub fn decrypt_file(key: &[u8; 32], data: &[u8]) -> Result<Zeroizing<Vec<u8>>, C
     }
 
     let cipher =
-        Aes256Gcm::new_from_slice(key).map_err(|_| ContentError::DecryptionFailed(0))?;
+        Aes256Gcm16::new_from_slice(key).map_err(|_| ContentError::DecryptionFailed(0))?;
 
     let num_blocks = (content.len() + BLOCK_SIZE_CIPHER - 1) / BLOCK_SIZE_CIPHER;
     let mut plaintext = Vec::with_capacity(num_blocks * BLOCK_SIZE_PLAIN);
@@ -121,12 +119,17 @@ pub fn decrypt_file(key: &[u8; 32], data: &[u8]) -> Result<Zeroizing<Vec<u8>>, C
         let end = std::cmp::min(start + BLOCK_SIZE_CIPHER, content.len());
         let block = &content[start..end];
 
-        let nonce_bytes = block_nonce(&file_id, block_num);
-        let nonce = Nonce::from_slice(&nonce_bytes);
-        let aad = block_aad(block_num);
+        if block.len() < IV_LEN {
+            return Err(ContentError::DecryptionFailed(block_num));
+        }
 
+        // Each block starts with a 16-byte random IV
+        let nonce = Nonce::from_slice(&block[..IV_LEN]);
+        let ciphertext_and_tag = &block[IV_LEN..];
+
+        let aad = block_aad(block_num, &file_id);
         let payload = Payload {
-            msg: block,
+            msg: ciphertext_and_tag,
             aad: &aad,
         };
 
@@ -135,7 +138,6 @@ pub fn decrypt_file(key: &[u8; 32], data: &[u8]) -> Result<Zeroizing<Vec<u8>>, C
             .map_err(|_| ContentError::DecryptionFailed(block_num))?;
 
         plaintext.append(&mut decrypted);
-        // Zeroize the source Vec after moving data out (append drains but may leave capacity)
         decrypted.zeroize();
     }
 
@@ -144,43 +146,10 @@ pub fn decrypt_file(key: &[u8; 32], data: &[u8]) -> Result<Zeroizing<Vec<u8>>, C
 
 /// Encrypt plaintext content into gocryptfs format.
 /// Returns the full encrypted file bytes (header + encrypted blocks).
+/// Each block = random_IV(16) + ciphertext + GCM_tag(16).
 pub fn encrypt_file(key: &[u8; 32], plaintext: &[u8]) -> Result<Vec<u8>, ContentError> {
     let (header, file_id) = create_header();
-
-    let cipher =
-        Aes256Gcm::new_from_slice(key).map_err(|_| ContentError::EncryptionFailed(0))?;
-
-    let num_blocks = if plaintext.is_empty() {
-        0
-    } else {
-        (plaintext.len() + BLOCK_SIZE_PLAIN - 1) / BLOCK_SIZE_PLAIN
-    };
-
-    let mut output = Vec::with_capacity(HEADER_LEN + num_blocks * BLOCK_SIZE_CIPHER);
-    output.extend_from_slice(&header);
-
-    for block_num in 0..num_blocks as u64 {
-        let start = block_num as usize * BLOCK_SIZE_PLAIN;
-        let end = std::cmp::min(start + BLOCK_SIZE_PLAIN, plaintext.len());
-        let block = &plaintext[start..end];
-
-        let nonce_bytes = block_nonce(&file_id, block_num);
-        let nonce = Nonce::from_slice(&nonce_bytes);
-        let aad = block_aad(block_num);
-
-        let payload = Payload {
-            msg: block,
-            aad: &aad,
-        };
-
-        let encrypted = cipher
-            .encrypt(nonce, payload)
-            .map_err(|_| ContentError::EncryptionFailed(block_num))?;
-
-        output.extend_from_slice(&encrypted);
-    }
-
-    Ok(output)
+    encrypt_file_inner(key, &file_id, &header, plaintext)
 }
 
 /// Encrypt plaintext using a specific file ID (for overwriting existing files).
@@ -189,8 +158,22 @@ pub fn encrypt_file_with_id(
     file_id: &[u8; FILE_ID_LEN],
     plaintext: &[u8],
 ) -> Result<Vec<u8>, ContentError> {
+    let mut header = [0u8; HEADER_LEN];
+    header[0..2].copy_from_slice(&VERSION_BYTES);
+    header[2..HEADER_LEN].copy_from_slice(file_id);
+    encrypt_file_inner(key, file_id, &header, plaintext)
+}
+
+fn encrypt_file_inner(
+    key: &[u8; 32],
+    file_id: &[u8; FILE_ID_LEN],
+    header: &[u8; HEADER_LEN],
+    plaintext: &[u8],
+) -> Result<Vec<u8>, ContentError> {
+    use rand::RngCore;
+
     let cipher =
-        Aes256Gcm::new_from_slice(key).map_err(|_| ContentError::EncryptionFailed(0))?;
+        Aes256Gcm16::new_from_slice(key).map_err(|_| ContentError::EncryptionFailed(0))?;
 
     let num_blocks = if plaintext.is_empty() {
         0
@@ -198,31 +181,30 @@ pub fn encrypt_file_with_id(
         (plaintext.len() + BLOCK_SIZE_PLAIN - 1) / BLOCK_SIZE_PLAIN
     };
 
-    let mut header = [0u8; HEADER_LEN];
-    header[0..2].copy_from_slice(&VERSION_BYTES);
-    header[2..HEADER_LEN].copy_from_slice(file_id);
-
     let mut output = Vec::with_capacity(HEADER_LEN + num_blocks * BLOCK_SIZE_CIPHER);
-    output.extend_from_slice(&header);
+    output.extend_from_slice(header);
 
     for block_num in 0..num_blocks as u64 {
         let start = block_num as usize * BLOCK_SIZE_PLAIN;
         let end = std::cmp::min(start + BLOCK_SIZE_PLAIN, plaintext.len());
         let block = &plaintext[start..end];
 
-        let nonce_bytes = block_nonce(file_id, block_num);
-        let nonce = Nonce::from_slice(&nonce_bytes);
-        let aad = block_aad(block_num);
+        // Random 16-byte IV per block
+        let mut iv = [0u8; IV_LEN];
+        rand::rng().fill_bytes(&mut iv);
 
+        let aad = block_aad(block_num, file_id);
         let payload = Payload {
             msg: block,
             aad: &aad,
         };
 
         let encrypted = cipher
-            .encrypt(nonce, payload)
+            .encrypt(Nonce::from_slice(&iv), payload)
             .map_err(|_| ContentError::EncryptionFailed(block_num))?;
 
+        // Block on disk = IV + ciphertext + tag
+        output.extend_from_slice(&iv);
         output.extend_from_slice(&encrypted);
     }
 
@@ -239,9 +221,9 @@ pub fn plaintext_size(ciphertext_size: u64) -> u64 {
     let remainder = content_size % BLOCK_SIZE_CIPHER as u64;
 
     let mut plain_size = full_blocks * BLOCK_SIZE_PLAIN as u64;
-    if remainder > 16 {
-        // Last partial block: subtract GCM tag
-        plain_size += remainder - 16;
+    let block_overhead = (IV_LEN + 16) as u64; // IV + GCM tag = 32
+    if remainder > block_overhead {
+        plain_size += remainder - block_overhead;
     }
     plain_size
 }
@@ -300,15 +282,15 @@ mod tests {
     fn test_plaintext_size_calculation() {
         assert_eq!(plaintext_size(0), 0);
         assert_eq!(plaintext_size(HEADER_LEN as u64), 0);
-        // One full block
+        // One full block: IV(16) + ciphertext(4096) + tag(16) = 4128
         assert_eq!(
             plaintext_size(HEADER_LEN as u64 + BLOCK_SIZE_CIPHER as u64),
             BLOCK_SIZE_PLAIN as u64
         );
-        // One full block + partial
+        // One full block + partial (100 bytes - 32 overhead = 68 plain)
         assert_eq!(
             plaintext_size(HEADER_LEN as u64 + BLOCK_SIZE_CIPHER as u64 + 100),
-            BLOCK_SIZE_PLAIN as u64 + 84 // 100 - 16 tag
+            BLOCK_SIZE_PLAIN as u64 + 68
         );
     }
 
@@ -334,11 +316,12 @@ mod tests {
 
     #[test]
     fn test_encrypt_decrypt_block_plus_one() {
-        // One full block + 1 byte → should produce 2 cipher blocks
+        // One full block + 1 byte → 2 cipher blocks
         let key = [0x42u8; 32];
         let plaintext = vec![0xEFu8; BLOCK_SIZE_PLAIN + 1];
         let encrypted = encrypt_file(&key, &plaintext).unwrap();
-        assert_eq!(encrypted.len(), HEADER_LEN + BLOCK_SIZE_CIPHER + 17); // 1 byte + 16 tag
+        // Second block: IV(16) + 1 byte ciphertext + tag(16) = 33
+        assert_eq!(encrypted.len(), HEADER_LEN + BLOCK_SIZE_CIPHER + 33);
         let decrypted = decrypt_file(&key, &encrypted).unwrap();
         assert_eq!(*decrypted, plaintext);
     }
@@ -425,15 +408,17 @@ mod tests {
     }
 
     #[test]
-    fn test_encrypt_file_with_id_deterministic() {
-        // Same key + file_id + plaintext → same ciphertext
+    fn test_encrypt_file_with_id_random_iv() {
+        // With random IVs, same input → different ciphertext each time
         let key = [0x42u8; 32];
         let file_id = [0xBB; FILE_ID_LEN];
-        let plaintext = b"deterministic test";
+        let plaintext = b"random iv test";
 
         let ct1 = encrypt_file_with_id(&key, &file_id, plaintext).unwrap();
         let ct2 = encrypt_file_with_id(&key, &file_id, plaintext).unwrap();
-        assert_eq!(ct1, ct2);
+        // Headers are the same (same file_id) but block IVs differ
+        assert_eq!(&ct1[..HEADER_LEN], &ct2[..HEADER_LEN]);
+        assert_ne!(&ct1[HEADER_LEN..], &ct2[HEADER_LEN..]);
     }
 
     #[test]
@@ -468,35 +453,16 @@ mod tests {
     }
 
     #[test]
-    fn test_block_nonce_construction() {
-        let file_id = [0u8; FILE_ID_LEN];
-        let nonce0 = block_nonce(&file_id, 0);
-        assert_eq!(nonce0, [0u8; NONCE_LEN]);
+    fn test_block_aad_format() {
+        let fid = [0xAA; FILE_ID_LEN];
+        let aad = block_aad(0, &fid);
+        // AAD = blockNo(8 bytes) + fileID(16 bytes) = 24 bytes
+        assert_eq!(aad.len(), 24);
+        assert_eq!(&aad[..8], &[0, 0, 0, 0, 0, 0, 0, 0]); // block 0
+        assert_eq!(&aad[8..], &[0xAA; 16]); // file_id
 
-        // Block 1 should XOR into bytes 8..16
-        let nonce1 = block_nonce(&file_id, 1);
-        // block_num = 1 as big-endian u64 = [0,0,0,0,0,0,0,1]
-        // XOR into file_id[8..16] (all zeros) → [0,0,0,0,0,0,0,1]
-        // nonce = first 12 bytes = [0,0,0,0,0,0,0,0,0,0,0,0]
-        // Wait: file_id[8+0..8+7] ^ bn_bytes[0..7], then nonce = buf[0..12]
-        // buf[8..15] = [0,0,0,0,0,0,0] ^ [0,0,0,0,0,0,0] = [0,0,0,0,0,0,0]
-        // buf[15] = 0 ^ 1 = 1  (but 15 >= 12 so not in nonce)
-        // Nonce should still be all zeros for block 1 with zero file_id since the XOR only affects
-        // the last 8 bytes, and the nonce takes first 12 bytes
-        assert_eq!(nonce1[..8], [0u8; 8]); // first 8 bytes unchanged
-
-        // Test with non-zero file_id
-        let mut fid = [0u8; FILE_ID_LEN];
-        fid[8] = 0xFF; // This is within nonce range (byte 8 < 12)
-        let nonce = block_nonce(&fid, 0);
-        assert_eq!(nonce[8], 0xFF); // Should preserve file_id[8]
-    }
-
-    #[test]
-    fn test_block_aad_values() {
-        assert_eq!(block_aad(0), [0, 0, 0, 0, 0, 0, 0, 0]);
-        assert_eq!(block_aad(1), [0, 0, 0, 0, 0, 0, 0, 1]);
-        assert_eq!(block_aad(256), [0, 0, 0, 0, 0, 0, 1, 0]);
+        let aad1 = block_aad(1, &fid);
+        assert_eq!(&aad1[..8], &[0, 0, 0, 0, 0, 0, 0, 1]); // block 1
     }
 
     #[test]
@@ -506,10 +472,10 @@ mod tests {
         assert_eq!(plaintext_size(17), 0);
         // Just header, no content
         assert_eq!(plaintext_size(18), 0);
-        // Header + 17 bytes (1 byte plaintext + 16 tag)
-        assert_eq!(plaintext_size(18 + 17), 1);
-        // Header + exactly GCM tag size (16 bytes of content → 0 plain)
-        assert_eq!(plaintext_size(18 + 16), 0);
+        // Header + 33 bytes (IV(16) + 1 byte plaintext + 16 tag)
+        assert_eq!(plaintext_size(18 + 33), 1);
+        // Header + just overhead (32 bytes = IV+tag → 0 plain)
+        assert_eq!(plaintext_size(18 + 32), 0);
         // Multiple full blocks
         assert_eq!(
             plaintext_size(HEADER_LEN as u64 + BLOCK_SIZE_CIPHER as u64 * 3),
@@ -546,6 +512,7 @@ mod tests {
     #[test]
     fn test_ciphertext_length_formula() {
         let key = [0x42u8; 32];
+        let overhead = IV_LEN + 16; // 32 bytes per block (IV + GCM tag)
         for size in [0, 1, 100, 4095, 4096, 4097, 8192, 10000] {
             let plaintext = vec![0u8; size];
             let encrypted = encrypt_file(&key, &plaintext).unwrap();
@@ -554,12 +521,15 @@ mod tests {
             } else {
                 (size + BLOCK_SIZE_PLAIN - 1) / BLOCK_SIZE_PLAIN
             };
-            let expected_len = HEADER_LEN + num_blocks * BLOCK_SIZE_CIPHER
-                - if size > 0 && size % BLOCK_SIZE_PLAIN != 0 {
-                    BLOCK_SIZE_PLAIN - (size % BLOCK_SIZE_PLAIN)
-                } else {
-                    0
-                };
+            // Each block adds overhead bytes; partial last block is smaller
+            let last_plain = if size > 0 { size - (num_blocks - 1) * BLOCK_SIZE_PLAIN } else { 0 };
+            let expected_len = if num_blocks == 0 {
+                HEADER_LEN
+            } else {
+                HEADER_LEN
+                    + (num_blocks - 1) * BLOCK_SIZE_CIPHER
+                    + overhead + last_plain
+            };
             assert_eq!(encrypted.len(), expected_len, "Failed for size {}", size);
         }
     }

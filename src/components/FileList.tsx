@@ -21,6 +21,7 @@ export function FileList() {
 
   const loadEntries = useCallback(async () => {
     setLoading(true);
+    useFileStore.getState().setStatusText("Loading directory...");
     try {
       const items = await listDir(currentPath);
       setEntries(items);
@@ -28,6 +29,7 @@ export function FileList() {
       // Failed to list directory
     } finally {
       setLoading(false);
+      useFileStore.getState().setStatusText("");
     }
   }, [currentPath, refreshCounter, setEntries, setLoading]);
 
@@ -68,7 +70,12 @@ export function FileList() {
     if (entry.is_dir) {
       navigateTo(fullPath(entry.name));
     } else {
-      startBusy();
+      const sizeStr = entry.size > 1024 * 1024
+        ? `${(entry.size / 1024 / 1024).toFixed(1)} MB`
+        : entry.size > 1024
+        ? `${(entry.size / 1024).toFixed(0)} KB`
+        : `${entry.size} B`;
+      startBusy(`Opening ${entry.name} (${sizeStr})...`);
       try {
         const content = await readFile(fullPath(entry.name));
         openTab({ path: fullPath(entry.name), name: entry.name, content, modified: false });
@@ -138,7 +145,7 @@ export function FileList() {
 
   const handlePaste = async () => {
     if (!clipboard) return;
-    startBusy();
+    startBusy(`Pasting ${clipboard.names.length} item(s)...`);
     try {
       for (let i = 0; i < clipboard.files.length; i++) {
         const sourcePath = clipboard.files[i];

@@ -62,7 +62,7 @@ export function useKeyboardShortcuts() {
         if (!state.clipboard) return;
         e.preventDefault();
         const { clipboard, currentPath } = state;
-        state.startBusy();
+        state.startBusy(`Pasting ${clipboard.names.length} item(s)...`);
         try {
           for (let i = 0; i < clipboard.files.length; i++) {
             const sourcePath = clipboard.files[i];

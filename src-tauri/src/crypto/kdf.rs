@@ -1,13 +1,20 @@
+use aes::Aes256;
 use aes_gcm::{
     aead::{Aead, KeyInit},
-    Aes256Gcm, Nonce,
+    AesGcm, Nonce,
 };
+use aes_gcm::aead::consts::U16;
 use hkdf::Hkdf;
 use sha2::Sha256;
 use zeroize::Zeroizing;
 
 use super::config::GocryptfsConfig;
 use thiserror::Error;
+
+/// gocryptfs uses 16-byte (128-bit) nonces for GCM when GCMIV128 flag is set.
+/// This is non-standard (AES-GCM default is 12 bytes) but Go's crypto library
+/// supports it via `cipher.NewGCMWithNonceSize(block, 16)`.
+type Aes256Gcm16 = AesGcm<Aes256, U16>;
 
 #[derive(Debug, Error)]
 pub enum KdfError {
@@ -52,26 +59,57 @@ pub fn derive_master_key(
     )
     .map_err(|e| KdfError::Scrypt(e.to_string()))?;
 
+    // When HKDF is enabled, gocryptfs derives a separate GCM key from the scrypt hash
+    // using HKDF-SHA256 with the info string "AES-GCM file content encryption".
+    // This same derived key is used both for master key wrapping AND file content encryption.
+    let gcm_key = if config.uses_hkdf() {
+        let hk = Hkdf::<Sha256>::new(None, scrypt_key.as_ref());
+        let mut derived = Zeroizing::new([0u8; 32]);
+        hk.expand(b"AES-GCM file content encryption", derived.as_mut())
+            .map_err(|_| KdfError::HkdfError)?;
+        derived
+    } else {
+        scrypt_key.clone()
+    };
+
     // Decrypt the master key
     let encrypted_key = STANDARD
         .decode(&config.encrypted_key)?;
 
-    // The encrypted key is: nonce (12 bytes) + ciphertext+tag
-    if encrypted_key.len() < 12 + 16 {
+    // gocryptfs format: nonce (16 bytes) + ciphertext (32 bytes) + GCM tag (16 bytes) = 64 bytes
+    // With HKDF: 128-bit (16-byte) nonces. Without: 96-bit (12-byte) nonces.
+    let iv_len = if config.uses_hkdf() { 16 } else { 12 };
+    if encrypted_key.len() < iv_len + 16 {
         return Err(KdfError::InvalidKeyLength);
     }
 
-    let nonce = Nonce::from_slice(&encrypted_key[..12]);
-    let ciphertext = &encrypted_key[12..];
+    let nonce = &encrypted_key[..iv_len];
+    let ciphertext = &encrypted_key[iv_len..];
 
-    let cipher = Aes256Gcm::new_from_slice(scrypt_key.as_ref())
-        .map_err(|_| KdfError::InvalidKeyLength)?;
+    // Use the appropriate GCM variant based on nonce size.
+    // AAD = blockNo(0) as big-endian u64 = 8 zero bytes (same as gocryptfs DecryptBlock).
+    use aes_gcm::aead::Payload;
+    let aad = [0u8; 8];
+    let payload = Payload { msg: ciphertext, aad: &aad };
 
-    let master_key_vec = Zeroizing::new(
-        cipher
-            .decrypt(nonce, ciphertext)
-            .map_err(|_| KdfError::DecryptionFailed)?,
-    );
+    let master_key_vec = if config.uses_hkdf() {
+        let cipher = Aes256Gcm16::new_from_slice(gcm_key.as_ref())
+            .map_err(|_| KdfError::InvalidKeyLength)?;
+        Zeroizing::new(
+            cipher
+                .decrypt(Nonce::from_slice(nonce), payload)
+                .map_err(|_| KdfError::DecryptionFailed)?,
+        )
+    } else {
+        use aes_gcm::Aes256Gcm;
+        let cipher = Aes256Gcm::new_from_slice(gcm_key.as_ref())
+            .map_err(|_| KdfError::InvalidKeyLength)?;
+        Zeroizing::new(
+            cipher
+                .decrypt(Nonce::from_slice(nonce), payload)
+                .map_err(|_| KdfError::DecryptionFailed)?,
+        )
+    };
 
     if master_key_vec.len() != 32 {
         return Err(KdfError::InvalidKeyLength);
@@ -193,13 +231,20 @@ mod tests {
         let mut wrapping_key = [0u8; 32];
         scrypt::scrypt(password.as_bytes(), &salt, &scrypt_params, &mut wrapping_key).unwrap();
 
-        // Encrypt a fake master key
-        use aes_gcm::{aead::{Aead, KeyInit}, Aes256Gcm, Nonce};
-        let cipher = Aes256Gcm::new_from_slice(&wrapping_key).unwrap();
-        let nonce_bytes = [0u8; 12];
+        // When HKDF flag is set, derive GCM key from scrypt hash via HKDF
+        let hk = Hkdf::<Sha256>::new(None, &wrapping_key);
+        let mut gcm_key = [0u8; 32];
+        hk.expand(b"AES-GCM file content encryption", &mut gcm_key).unwrap();
+
+        // Encrypt a fake master key with 16-byte nonce (GCMIV128) + AAD
+        use aes_gcm::aead::Payload;
+        let cipher = Aes256Gcm16::new_from_slice(&gcm_key).unwrap();
+        let nonce_bytes = [0u8; 16];
         let nonce = Nonce::from_slice(&nonce_bytes);
         let fake_master = [0xBB; 32];
-        let encrypted_master = cipher.encrypt(nonce, fake_master.as_ref()).unwrap();
+        let aad = [0u8; 8]; // blockNo=0
+        let payload = Payload { msg: fake_master.as_ref(), aad: &aad };
+        let encrypted_master = cipher.encrypt(nonce, payload).unwrap();
 
         let mut encrypted_key_full = Vec::new();
         encrypted_key_full.extend_from_slice(&nonce_bytes);

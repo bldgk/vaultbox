@@ -106,7 +106,7 @@ export function Toolbar() {
           const selected = await open({ multiple: true });
           if (selected) {
             const paths = Array.isArray(selected) ? selected : [selected];
-            useFileStore.getState().startBusy();
+            useFileStore.getState().startBusy("Importing files...");
             try {
               await importFiles(paths as string[], currentPath);
               useFileStore.getState().refresh();

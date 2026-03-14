@@ -125,11 +125,15 @@ pub async fn create_vault(
     // Zeroize password bytes immediately after scrypt
     password.zeroize();
 
-    // Encrypt master key with wrapping key
-    let cipher = Aes256Gcm::new_from_slice(wrapping_key.as_ref())
+    // Encrypt master key with wrapping key using 16-byte nonce (GCMIV128)
+    use aes::Aes256;
+    use aes_gcm::aead::consts::U16;
+    type Aes256Gcm16 = aes_gcm::AesGcm<Aes256, U16>;
+
+    let cipher = Aes256Gcm16::new_from_slice(wrapping_key.as_ref())
         .map_err(|_| "Failed to create cipher")?;
 
-    let mut nonce_bytes = [0u8; 12];
+    let mut nonce_bytes = [0u8; 16]; // 16-byte nonce for GCMIV128
     rand::rng().fill_bytes(&mut nonce_bytes);
     let nonce = Nonce::from_slice(&nonce_bytes);
 
@@ -137,8 +141,8 @@ pub async fn create_vault(
         .encrypt(nonce, master_key.as_ref() as &[u8])
         .map_err(|_| "Failed to encrypt master key")?;
 
-    // Combine nonce + encrypted key
-    let mut encrypted_key_full = Vec::with_capacity(12 + encrypted_master.len());
+    // Combine nonce(16) + encrypted key(32+16 tag) = 64 bytes
+    let mut encrypted_key_full = Vec::with_capacity(16 + encrypted_master.len());
     encrypted_key_full.extend_from_slice(&nonce_bytes);
     encrypted_key_full.extend_from_slice(&encrypted_master);
 

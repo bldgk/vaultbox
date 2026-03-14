@@ -1,42 +1,20 @@
-import { useEffect, useMemo } from "react";
 import { useFileStore } from "../../store/fileStore";
+
+function getMediaUrl(filePath: string): string {
+  return `vaultmedia://localhost/${encodeURIComponent(filePath)}`;
+}
 
 export function ImageViewer({ tabIndex }: { tabIndex: number }) {
   const { openTabs, setFullscreenPreview } = useFileStore();
   const tab = openTabs[tabIndex];
-  const content = tab?.content;
+  if (!tab) return null;
 
-  const src = useMemo(() => {
-    if (!content) return null;
-    if (content.type === "Binary") {
-      const ext = tab.name.split(".").pop()?.toLowerCase() ?? "png";
-      const mime = ext === "svg" ? "image/svg+xml" : `image/${ext === "jpg" ? "jpeg" : ext}`;
-      // Use blob URLs instead of data URIs to prevent SVG script execution
-      const raw = atob(content.data);
-      const bytes = new Uint8Array(raw.length);
-      for (let i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i);
-      const blob = new Blob([bytes], { type: mime });
-      return URL.createObjectURL(blob);
-    }
-    if (content.type === "Text" && tab.name.endsWith(".svg")) {
-      const blob = new Blob([content.data], { type: "image/svg+xml" });
-      return URL.createObjectURL(blob);
-    }
-    return null;
-  }, [content, tab]);
-
-  // Revoke blob URL on unmount or when src changes to prevent memory leaks
-  useEffect(() => {
-    return () => {
-      if (src && src.startsWith("blob:")) URL.revokeObjectURL(src);
-    };
-  }, [src]);
-
-  if (!src) return <div className="flex-1 flex items-center justify-center text-gray-500">Cannot display image</div>;
+  // Use vaultmedia:// protocol — streams directly from Rust, no base64 overhead
+  const src = getMediaUrl(tab.path);
 
   const handleFullscreen = () => {
-    if (tab && content) {
-      setFullscreenPreview({ filePath: tab.path, fileName: tab.name, content });
+    if (tab?.content) {
+      setFullscreenPreview({ filePath: tab.path, fileName: tab.name, content: tab.content });
     }
   };
 

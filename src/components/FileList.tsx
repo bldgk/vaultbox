@@ -201,9 +201,18 @@ export function FileList() {
   };
 
   const handlePreview = async (entry: FileEntry) => {
+    const fp = fullPath(entry.name);
+    // Reuse content from open tab if available
+    const { openTabs } = useFileStore.getState();
+    const existingTab = openTabs.find((t) => t.path === fp);
+    if (existingTab?.content) {
+      setFullscreenPreview({ filePath: fp, fileName: entry.name, content: existingTab.content });
+      return;
+    }
+    // Otherwise load — but for images/video, fullscreen uses vaultmedia:// so content is just a placeholder
     try {
-      const content = await readFile(fullPath(entry.name));
-      setFullscreenPreview({ filePath: fullPath(entry.name), fileName: entry.name, content });
+      const content = await readFile(fp);
+      setFullscreenPreview({ filePath: fp, fileName: entry.name, content });
     } catch (err) {
       alert(`Failed to preview: ${err}`);
     }

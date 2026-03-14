@@ -1,30 +1,8 @@
 import { useEffect, useMemo, useCallback, useState, useRef } from "react";
 import { useFileStore } from "../store/fileStore";
-import { readFile } from "../hooks/useTauriCommands";
 import { getViewerType } from "../lib/fileTypes";
 
 const PREVIEWABLE_TYPES = new Set(["image", "media"]);
-
-function getImageSrc(fileName: string, content: { type: string; data: string }): string | null {
-  const ext = fileName.split(".").pop()?.toLowerCase() ?? "";
-  if (content.type === "Text" && fileName.endsWith(".svg")) {
-    // Use blob URL instead of data URI to prevent SVG script execution
-    const blob = new Blob([content.data], { type: "image/svg+xml" });
-    return URL.createObjectURL(blob);
-  }
-  if (content.type !== "Binary") return null;
-  const mimeMap: Record<string, string> = {
-    png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", gif: "image/gif",
-    webp: "image/webp", svg: "image/svg+xml", bmp: "image/bmp", ico: "image/x-icon",
-    avif: "image/avif",
-  };
-  const mime = mimeMap[ext] ?? "image/png";
-  const raw = atob(content.data);
-  const bytes = new Uint8Array(raw.length);
-  for (let i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i);
-  const blob = new Blob([bytes], { type: mime });
-  return URL.createObjectURL(blob);
-}
 
 function getMediaUrl(filePath: string): string {
   return `vaultmedia://localhost/${encodeURIComponent(filePath)}`;
@@ -53,17 +31,18 @@ export function FullscreenViewer() {
     return previewableFiles.findIndex((f) => f.path === fullscreenPreview.filePath);
   }, [fullscreenPreview, previewableFiles]);
 
-  const navigateToFile = useCallback(async (index: number) => {
+  const navigateToFile = useCallback((index: number) => {
     if (index < 0 || index >= previewableFiles.length) return;
     const file = previewableFiles[index];
-    try {
-      const content = await readFile(file.path);
-      setZoom(1);
-      setPan({ x: 0, y: 0 });
-      setFullscreenPreview({ filePath: file.path, fileName: file.name, content });
-    } catch {
-      // Failed to load preview — silently ignore
-    }
+    setZoom(1);
+    setPan({ x: 0, y: 0 });
+    // Images/videos use vaultmedia:// — we only need the path, no content download.
+    // Pass a dummy content object since FullscreenPreview requires it.
+    setFullscreenPreview({
+      filePath: file.path,
+      fileName: file.name,
+      content: { type: "Binary", data: "" },
+    });
   }, [previewableFiles, setFullscreenPreview]);
 
   const goNext = useCallback(() => {
@@ -79,23 +58,11 @@ export function FullscreenViewer() {
   const isImage = viewerType === "image";
   const isVideo = viewerType === "media";
 
-  // Images use blob URLs, videos use streaming protocol
-  const imgSrc = useMemo(() => {
-    if (!fullscreenPreview || !isImage) return null;
-    return getImageSrc(fullscreenPreview.fileName, fullscreenPreview.content);
-  }, [fullscreenPreview, isImage]);
-
-  const videoSrc = useMemo(() => {
-    if (!fullscreenPreview || !isVideo) return null;
+  // Both images and videos use vaultmedia:// — no base64, no blob URLs, instant
+  const mediaSrc = useMemo(() => {
+    if (!fullscreenPreview || (!isImage && !isVideo)) return null;
     return getMediaUrl(fullscreenPreview.filePath);
-  }, [fullscreenPreview, isVideo]);
-
-  // Revoke blob URL on change/unmount
-  useEffect(() => {
-    return () => {
-      if (imgSrc && imgSrc.startsWith("blob:")) URL.revokeObjectURL(imgSrc);
-    };
-  }, [imgSrc]);
+  }, [fullscreenPreview, isImage, isVideo]);
 
   // Keyboard handler
   useEffect(() => {
@@ -205,9 +172,9 @@ export function FullscreenViewer() {
         onMouseLeave={isImage ? handleMouseUp : undefined}
         style={{ cursor: isImage && zoom > 1 ? (isDragging ? "grabbing" : "grab") : "default" }}
       >
-        {isImage && imgSrc && (
+        {isImage && mediaSrc && (
           <img
-            src={imgSrc}
+            src={mediaSrc}
             alt={fullscreenPreview.fileName}
             className="transition-transform duration-100"
             style={{
@@ -226,16 +193,16 @@ export function FullscreenViewer() {
             }}
           />
         )}
-        {isVideo && videoSrc && (
+        {isVideo && mediaSrc && (
           <video
             ref={videoRef}
             controls
             autoPlay
-            src={videoSrc}
+            src={mediaSrc}
             className="max-w-full max-h-full"
           />
         )}
-        {!imgSrc && !videoSrc && (
+        {!mediaSrc && (
           <div className="text-gray-500">Cannot display preview</div>
         )}
       </div>

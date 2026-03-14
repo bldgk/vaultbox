@@ -60,7 +60,29 @@ jobs:
         with:
           tagName: v__VERSION__
           releaseName: VaultBox v__VERSION__
-          releaseBody: "See the assets below to download and install VaultBox v__VERSION__."
+          releaseBody: |
+            A desktop app for browsing gocryptfs-encrypted vaults without mounting them. All decryption happens in-process with zero plaintext on disk.
+
+            ## Features
+
+            - **Vault management** — Open, create, and lock gocryptfs v2 vaults with secure password handling
+            - **File operations** — Browse, create, rename, delete, search, import, and export encrypted files
+            - **Text editor** — CodeMirror 6 with syntax highlighting for 11+ languages
+            - **Image viewer** — Blob-rendered previews with fullscreen mode
+            - **Media player** — Streaming video/audio via custom `vaultmedia://` protocol with HTTP Range support for seeking
+            - **Hex viewer** — Binary file inspection with offset/hex/ASCII display
+            - **Clipboard** — Copy decrypted content with auto-clear after timeout
+            - **Streaming decryption** — On-demand block decryption for large files (>10 MB) without loading into RAM
+            - **Security** — mlock'd XOR-masked keys, zeroized memory, auto-lock after inactivity, no unsafe-eval CSP
+
+            ## Platforms
+
+            | Platform | Architecture | Format |
+            |----------|-------------|--------|
+            | Linux | x86_64 | .deb, .AppImage |
+            | macOS | Apple Silicon | .dmg |
+            | macOS | Intel | .dmg |
+            | Windows | x86_64 | .msi, .exe |
           releaseDraft: true
           prerelease: false
           args: --target ${{ matrix.target }}

@@ -41,3 +41,10 @@ src-tauri/gen/schemas
 vaultbox-task.md
 
 .vscode
+
+# Debug / temp files
+debug_kdf.go
+vmmap.log
+
+# Encrypted vault test data (may contain personal files)
+cipher/

@@ -11,14 +11,18 @@ use std::process::Command;
 
 use vaultbox_lib::crypto::{config::GocryptfsConfig, content, diriv, filename, kdf};
 
-const GOCRYPTFS_BIN: &str = "/Users/bldg/dev/gocryptfs/gocryptfs";
+fn gocryptfs_bin() -> String {
+    std::env::var("GOCRYPTFS_BIN")
+        .unwrap_or_else(|_| "gocryptfs".to_string()) // fallback to PATH
+}
 
 fn has_gocryptfs() -> bool {
-    Path::new(GOCRYPTFS_BIN).exists()
+    // Check PATH or explicit env var
+    Command::new(gocryptfs_bin()).arg("--version").output().is_ok()
 }
 
 fn gocryptfs_init(cipher_dir: &Path, password: &str) {
-    let output = Command::new(GOCRYPTFS_BIN)
+    let output = Command::new(gocryptfs_bin())
         .args(["-init", "-extpass", &format!("echo {}", password), "-scryptn", "10", cipher_dir.to_str().unwrap()])
         .output()
         .expect("Failed to run gocryptfs -init");
@@ -91,7 +95,8 @@ fn test_rust_reads_gocryptfs_config() {
 /// Read the real cipher vault that was created by gocryptfs.
 #[test]
 fn test_decrypt_existing_cipher_vault() {
-    let cipher = Path::new("/Users/bldg/dev/vaultbox/cipher");
+    let cipher_env = std::env::var("VAULTBOX_TEST_CIPHER").unwrap_or_else(|_| "cipher".into());
+    let cipher = Path::new(&cipher_env);
     if !cipher.exists() {
         eprintln!("SKIP: cipher vault not found");
         return;
@@ -131,7 +136,7 @@ fn test_decrypt_existing_cipher_vault() {
 #[ignore = "requires FUSE mount — run with: cargo test --test gocryptfs_compat -- --ignored"]
 fn test_cross_decrypt_filenames_via_fuse() {
     if !has_gocryptfs() {
-        panic!("gocryptfs binary not found at {}", GOCRYPTFS_BIN);
+        panic!("gocryptfs binary not found. Set GOCRYPTFS_BIN env var or add to PATH");
     }
 
     let dir = tempfile::tempdir().unwrap();
@@ -143,7 +148,7 @@ fn test_cross_decrypt_filenames_via_fuse() {
     let password = "fuse-test-pw";
     gocryptfs_init(&cipher, password);
 
-    let output = Command::new(GOCRYPTFS_BIN)
+    let output = Command::new(gocryptfs_bin())
         .args(["-extpass", &format!("echo {}", password), cipher.to_str().unwrap(), plain.to_str().unwrap()])
         .output().unwrap();
     assert!(output.status.success(), "Mount failed: {}", String::from_utf8_lossy(&output.stderr));
@@ -178,7 +183,7 @@ fn test_cross_decrypt_filenames_via_fuse() {
 #[ignore = "requires FUSE mount — run with: cargo test --test gocryptfs_compat -- --ignored"]
 fn test_cross_decrypt_content_via_fuse() {
     if !has_gocryptfs() {
-        panic!("gocryptfs binary not found at {}", GOCRYPTFS_BIN);
+        panic!("gocryptfs binary not found. Set GOCRYPTFS_BIN env var or add to PATH");
     }
 
     let dir = tempfile::tempdir().unwrap();
@@ -190,7 +195,7 @@ fn test_cross_decrypt_content_via_fuse() {
     let password = "content-fuse-pw";
     gocryptfs_init(&cipher, password);
 
-    let output = Command::new(GOCRYPTFS_BIN)
+    let output = Command::new(gocryptfs_bin())
         .args(["-extpass", &format!("echo {}", password), cipher.to_str().unwrap(), plain.to_str().unwrap()])
         .output().unwrap();
     assert!(output.status.success(), "Mount failed");

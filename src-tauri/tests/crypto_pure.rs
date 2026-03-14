@@ -91,7 +91,7 @@ fn test_hkdf_raw_matches_kdf_functions() {
 
 #[test]
 fn test_real_vault_kdf_cipher() {
-    // From /Users/bldg/dev/vaultbox/cipher/gocryptfs.conf, password="123456123"
+    // Known test vector from a gocryptfs v2 vault (password="123456123")
     let config = vaultbox_lib::crypto::config::GocryptfsConfig {
         creator: "gocryptfs v2.6.1-41-g501d5a5".into(),
         encrypted_key: "vPlK2K0mTbm5uTQ3iA1ZV2sjOADUaChwiSqo8YreWaLC935IfJepbAWvr2kZvD89ce2FN0y374zxIPo92PVWaw==".into(),

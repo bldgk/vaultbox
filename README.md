@@ -2,7 +2,7 @@
 
 A desktop application for browsing gocryptfs-encrypted vaults without mounting them. All decryption happens in-process memory — no FUSE mount, no temp files on disk, no plaintext exposed to other apps.
 
-Cryptographic compatibility with gocryptfs v2 is verified by cross-validation tests: files encrypted by gocryptfs are decrypted by VaultBox and vice versa.
+Cryptographic compatibility with gocryptfs v2 is verified by cross-validation tests: files encrypted by [gocryptfs](https://github.com/rfjakob/gocryptfs) are decrypted by VaultBox and vice versa.
 
 > **Warning:** This is an experimental project. The cryptographic implementation has not been independently audited. There may be bugs that corrupt data or compromise security. **Use at your own risk.** Do not rely on this as your only way to access important encrypted data — always keep backups.
 

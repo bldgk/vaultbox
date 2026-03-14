@@ -86,7 +86,7 @@ pub async fn create_vault(
 ) -> Result<VaultInfo, String> {
     use aes_gcm::{
         aead::{Aead, KeyInit},
-        Aes256Gcm, Nonce,
+        Nonce,
     };
     use base64::engine::general_purpose::STANDARD;
     use base64::Engine;
@@ -185,12 +185,12 @@ pub async fn create_vault(
     let filename_key = kdf::derive_filename_key(&master_key)
         .map_err(|e| format!("Failed to derive filename key: {}", e))?;
 
-    // Format master key as hex for one-time display, then it will be zeroized
+    // Format master key as hex groups (same format as gocryptfs) for one-time display
     let mut master_key_hex = master_key
-        .iter()
-        .map(|b| format!("{:02x}", b))
+        .chunks(4)
+        .map(|chunk| chunk.iter().map(|b| format!("{:02x}", b)).collect::<String>())
         .collect::<Vec<_>>()
-        .join("");
+        .join("-");
 
     let info = VaultInfo {
         path: path.clone(),

@@ -1,0 +1,57 @@
+[package]
+name = "vaultbox-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[workspace]
+
+[dependencies]
+libfuzzer-sys = "0.4"
+arbitrary = { version = "1", features = ["derive"] }
+
+# Same crypto deps as the main crate — fuzz targets include crypto source directly
+aes = "0.8"
+aes-gcm = "0.10"
+scrypt = "0.11"
+hkdf = "0.12"
+sha2 = "0.10"
+base64 = "0.22"
+zeroize = { version = "1", features = ["derive"] }
+thiserror = "2"
+rand = "0.9"
+lru = "0.14"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+cipher = "0.4"
+
+[[bin]]
+name = "fuzz_content_decrypt"
+path = "fuzz_targets/fuzz_content_decrypt.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_content_roundtrip"
+path = "fuzz_targets/fuzz_content_roundtrip.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_filename"
+path = "fuzz_targets/fuzz_filename.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_eme"
+path = "fuzz_targets/fuzz_eme.rs"
+test = false
+doc = false
+bench = false

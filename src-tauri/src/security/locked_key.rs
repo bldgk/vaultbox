@@ -44,10 +44,8 @@ impl LockedKey {
         }
 
         // mlock both the masked data and the mask
-        let ptr_data = masked_data.as_ptr() as *const u8;
-        let ptr_mask = mask.as_ptr() as *const u8;
-        let locked_data = mlock::mlock(ptr_data, 32);
-        let locked_mask = mlock::mlock(ptr_mask, 32);
+        let locked_data = mlock::mlock(masked_data.as_ptr(), 32);
+        let locked_mask = mlock::mlock(mask.as_ptr(), 32);
         let locked = locked_data && locked_mask;
 
         if !locked {
@@ -67,8 +65,8 @@ impl LockedKey {
     /// After `f` returns, `tmp` is zeroized and the mask is re-randomized.
     pub fn use_key<R>(&self, f: impl FnOnce(&[u8; 32]) -> R) -> R {
         let mut tmp = [0u8; 32];
-        for i in 0..32 {
-            tmp[i] = self.masked_data[i] ^ self.mask[i];
+        for (i, byte) in tmp.iter_mut().enumerate() {
+            *byte = self.masked_data[i] ^ self.mask[i];
         }
 
         let result = f(&tmp);
@@ -85,16 +83,16 @@ impl LockedKey {
     pub fn use_key_mut<R>(&mut self, f: impl FnOnce(&[u8; 32]) -> R) -> R {
         // Unmask
         let mut tmp = [0u8; 32];
-        for i in 0..32 {
-            tmp[i] = self.masked_data[i] ^ self.mask[i];
+        for (i, byte) in tmp.iter_mut().enumerate() {
+            *byte = self.masked_data[i] ^ self.mask[i];
         }
 
         let result = f(&tmp);
 
         // Re-mask with new random mask
         rand::rng().fill_bytes(self.mask.as_mut());
-        for i in 0..32 {
-            self.masked_data[i] = tmp[i] ^ self.mask[i];
+        for (i, byte) in self.masked_data.iter_mut().enumerate() {
+            *byte = tmp[i] ^ self.mask[i];
         }
 
         tmp.zeroize();
@@ -131,8 +129,8 @@ impl Drop for LockedKey {
         self.masked_data.zeroize();
         self.mask.zeroize();
         if self.locked {
-            mlock::munlock(self.masked_data.as_ptr() as *const u8, 32);
-            mlock::munlock(self.mask.as_ptr() as *const u8, 32);
+            mlock::munlock(self.masked_data.as_ptr(), 32);
+            mlock::munlock(self.mask.as_ptr(), 32);
         }
     }
 }
@@ -140,8 +138,8 @@ impl Drop for LockedKey {
 impl Clone for LockedKey {
     fn clone(&self) -> Self {
         let mut tmp = [0u8; 32];
-        for i in 0..32 {
-            tmp[i] = self.masked_data[i] ^ self.mask[i];
+        for (i, byte) in tmp.iter_mut().enumerate() {
+            *byte = self.masked_data[i] ^ self.mask[i];
         }
         let cloned = LockedKey::new(tmp);
         tmp.zeroize();

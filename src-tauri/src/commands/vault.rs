@@ -159,7 +159,7 @@ pub async fn create_vault(
         creator: "vaultbox".to_string(),
         encrypted_key: STANDARD.encode(&encrypted_key_full),
         scrypt_object: crate::crypto::config::ScryptObject {
-            salt: STANDARD.encode(&salt),
+            salt: STANDARD.encode(salt),
             n: scrypt_n,
             r: scrypt_r,
             p: scrypt_p,

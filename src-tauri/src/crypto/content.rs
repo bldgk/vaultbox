@@ -4,16 +4,9 @@
 //! - 18-byte header: 2 bytes version (0x00 0x02) + 16 bytes file ID
 //! - Content blocks: each 4096 bytes plaintext → 4112 bytes encrypted (4096 + 16 GCM tag)
 //!
-//! Nonce construction: 96-bit nonce = fileID XOR block_number(big-endian, zero-padded to 16 bytes)
-//! then truncated to 12 bytes. Actually in gocryptfs:
-//! - Nonce is 12 bytes: first 12 bytes of (file_id XOR zero-padded block_number)
-//! Wait, let me re-read the spec. The nonce is constructed differently:
-//! - 96-bit nonce = file_id[0..12] XOR block_number_padded[0..12] (taking first 12 bytes)
-//! But file_id is 16 bytes... Let me check gocryptfs source.
+//! Nonce construction (per gocryptfs source):
 //!
-//! Actually per gocryptfs source:
 //! - Nonce is 12 bytes (96 bits) for GCM-IV128 mode
-//! - Nonce = file_id[0..16] is used to derive block nonces
 //! - Block nonce: take fileID (16 bytes), XOR the block number into the last 8 bytes (big-endian),
 //!   then use the first 12 bytes as the GCM nonce.
 
@@ -111,7 +104,7 @@ pub fn decrypt_file(key: &[u8; 32], data: &[u8]) -> Result<Zeroizing<Vec<u8>>, C
     let cipher =
         Aes256Gcm16::new_from_slice(key).map_err(|_| ContentError::DecryptionFailed(0))?;
 
-    let num_blocks = (content.len() + BLOCK_SIZE_CIPHER - 1) / BLOCK_SIZE_CIPHER;
+    let num_blocks = content.len().div_ceil(BLOCK_SIZE_CIPHER);
     let mut plaintext = Vec::with_capacity(num_blocks * BLOCK_SIZE_PLAIN);
 
     for block_num in 0..num_blocks as u64 {
@@ -178,7 +171,7 @@ fn encrypt_file_inner(
     let num_blocks = if plaintext.is_empty() {
         0
     } else {
-        (plaintext.len() + BLOCK_SIZE_PLAIN - 1) / BLOCK_SIZE_PLAIN
+        plaintext.len().div_ceil(BLOCK_SIZE_PLAIN)
     };
 
     let mut output = Vec::with_capacity(HEADER_LEN + num_blocks * BLOCK_SIZE_CIPHER);

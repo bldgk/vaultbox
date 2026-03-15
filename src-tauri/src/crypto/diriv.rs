@@ -31,7 +31,7 @@ pub fn create_diriv(dir_path: &Path) -> Result<[u8; DIRIV_LEN], DirIvError> {
     let mut iv = [0u8; DIRIV_LEN];
     rand::rng().fill_bytes(&mut iv);
     let iv_path = dir_path.join(DIRIV_FILENAME);
-    fs::write(&iv_path, &iv)?;
+    fs::write(&iv_path, iv)?;
     Ok(iv)
 }
 

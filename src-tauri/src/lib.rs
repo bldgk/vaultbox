@@ -41,9 +41,7 @@ fn parse_range(range_header: &str, total: usize) -> Option<(usize, usize)> {
         return None;
     }
     let range = range_header.strip_prefix("bytes=")?;
-    let mut parts = range.splitn(2, '-');
-    let start_str = parts.next()?;
-    let end_str = parts.next()?;
+    let (start_str, end_str) = range.split_once('-')?;
 
     if start_str.is_empty() {
         // suffix range: bytes=-500 means last 500 bytes
@@ -417,7 +415,7 @@ pub fn run() {
 
             std::thread::spawn(move || {
                 let response = serve_media(&state, &path, range_header.as_deref());
-                let _ = responder.respond(response);
+                responder.respond(response);
             });
         })
         .invoke_handler(tauri::generate_handler![

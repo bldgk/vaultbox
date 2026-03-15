@@ -1,7 +1,7 @@
 # VaultBox
 
 [![CI](https://github.com/bldgk/vaultbox/actions/workflows/ci.yml/badge.svg)](https://github.com/bldgk/vaultbox/actions/workflows/ci.yml)
-[![Build](https://github.com/bldgk/vaultbox/actions/workflows/build.yml/badge.svg)](https://github.com/bldgk/vaultbox/actions/workflows/build.yml)
+[![Build](https://github.com/bldgk/vaultbox/actions/workflows/build.yml/badge.svg?event=push)](https://github.com/bldgk/vaultbox/actions/workflows/build.yml)
 
 A desktop application for browsing gocryptfs-encrypted vaults without mounting them. All decryption happens in-process memory — no FUSE mount, no temp files on disk, no plaintext exposed to other apps.
 

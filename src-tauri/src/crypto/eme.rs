@@ -53,7 +53,7 @@ fn tabulate_l(cipher: &Aes256, m: usize) -> Vec<[u8; BLOCK_SIZE]> {
 /// - CCC[0] = MC ⊕ T ⊕ (⊕ CCC[j] for j >= 2)
 fn eme_transform(key: &[u8; 32], tweak: &[u8; BLOCK_SIZE], data: &[u8], encrypt: bool) -> Vec<u8> {
     assert!(
-        !data.is_empty() && data.len() % BLOCK_SIZE == 0,
+        !data.is_empty() && data.len().is_multiple_of(BLOCK_SIZE),
         "EME data must be non-empty and a multiple of 16 bytes"
     );
 

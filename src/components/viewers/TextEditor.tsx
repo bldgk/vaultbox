@@ -1,47 +1,88 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { EditorView, keymap, lineNumbers, highlightActiveLine, drawSelection } from "@codemirror/view";
-import { EditorState } from "@codemirror/state";
+import { EditorState, Compartment } from "@codemirror/state";
 import { defaultKeymap, history, historyKeymap } from "@codemirror/commands";
 import { syntaxHighlighting, defaultHighlightStyle, bracketMatching } from "@codemirror/language";
 import { oneDark } from "@codemirror/theme-one-dark";
 import { useFileStore } from "../../store/fileStore";
 import { useDialogStore } from "../../store/dialogStore";
 import { writeFile } from "../../hooks/useTauriCommands";
-
-// Language imports — lazy loaded via dynamic import wouldn't help much,
-// these are small (~5-20 KB each)
-import { javascript } from "@codemirror/lang-javascript";
-import { python } from "@codemirror/lang-python";
-import { html } from "@codemirror/lang-html";
-import { css } from "@codemirror/lang-css";
-import { json } from "@codemirror/lang-json";
-import { markdown } from "@codemirror/lang-markdown";
-import { rust } from "@codemirror/lang-rust";
-import { cpp } from "@codemirror/lang-cpp";
-import { java } from "@codemirror/lang-java";
-import { xml } from "@codemirror/lang-xml";
-import { sql } from "@codemirror/lang-sql";
-import { go } from "@codemirror/lang-go";
-import { php } from "@codemirror/lang-php";
 import type { Extension } from "@codemirror/state";
 
-function getLanguageExtension(filename: string): Extension[] {
+/**
+ * Pressure V8's GC by allocating and discarding large ArrayBuffers.
+ * This encourages the engine to reclaim unreachable string heap memory
+ * (e.g. plaintext from a closed editor tab).
+ */
+function pressureGC() {
+  try {
+    for (let i = 0; i < 3; i++) {
+      void new ArrayBuffer(32 * 1024 * 1024); // 32 MB
+    }
+  } catch {
+    // Allocation failure is fine — the point is to trigger GC
+  }
+}
+
+async function loadLanguageExtension(filename: string): Promise<Extension[]> {
   const ext = filename.split(".").pop()?.toLowerCase() ?? "";
   switch (ext) {
-    case "js": case "jsx": return [javascript({ jsx: true })];
-    case "ts": case "tsx": return [javascript({ jsx: true, typescript: true })];
-    case "py": return [python()];
-    case "html": case "htm": case "vue": case "svelte": return [html()];
-    case "css": case "scss": case "less": return [css()];
-    case "json": return [json()];
-    case "md": case "markdown": return [markdown()];
-    case "rs": return [rust()];
-    case "c": case "cpp": case "h": case "hpp": case "cc": return [cpp()];
-    case "java": case "kt": return [java()];
-    case "xml": case "svg": case "plist": return [xml()];
-    case "sql": return [sql()];
-    case "go": return [go()];
-    case "php": return [php()];
+    case "js": case "jsx": {
+      const { javascript } = await import("@codemirror/lang-javascript");
+      return [javascript({ jsx: true })];
+    }
+    case "ts": case "tsx": {
+      const { javascript } = await import("@codemirror/lang-javascript");
+      return [javascript({ jsx: true, typescript: true })];
+    }
+    case "py": {
+      const { python } = await import("@codemirror/lang-python");
+      return [python()];
+    }
+    case "html": case "htm": case "vue": case "svelte": {
+      const { html } = await import("@codemirror/lang-html");
+      return [html()];
+    }
+    case "css": case "scss": case "less": {
+      const { css } = await import("@codemirror/lang-css");
+      return [css()];
+    }
+    case "json": {
+      const { json } = await import("@codemirror/lang-json");
+      return [json()];
+    }
+    case "md": case "markdown": {
+      const { markdown } = await import("@codemirror/lang-markdown");
+      return [markdown()];
+    }
+    case "rs": {
+      const { rust } = await import("@codemirror/lang-rust");
+      return [rust()];
+    }
+    case "c": case "cpp": case "h": case "hpp": case "cc": {
+      const { cpp } = await import("@codemirror/lang-cpp");
+      return [cpp()];
+    }
+    case "java": case "kt": {
+      const { java } = await import("@codemirror/lang-java");
+      return [java()];
+    }
+    case "xml": case "svg": case "plist": {
+      const { xml } = await import("@codemirror/lang-xml");
+      return [xml()];
+    }
+    case "sql": {
+      const { sql } = await import("@codemirror/lang-sql");
+      return [sql()];
+    }
+    case "go": {
+      const { go } = await import("@codemirror/lang-go");
+      return [go()];
+    }
+    case "php": {
+      const { php } = await import("@codemirror/lang-php");
+      return [php()];
+    }
     default: return [];
   }
 }
@@ -257,6 +298,9 @@ export function TextEditor({ tabIndex }: { tabIndex: number }) {
       previewHtmlRef.current(renderMarkdown(content.data));
     }
 
+    // Compartment allows reconfiguring the language extension after async load
+    const langCompartment = new Compartment();
+
     const state = EditorState.create({
       doc: content.data,
       extensions: [
@@ -291,16 +335,35 @@ export function TextEditor({ tabIndex }: { tabIndex: number }) {
           ".cm-scroller": { overflow: "auto" },
           ".cm-content": { padding: "8px 0" },
         }),
-        ...getLanguageExtension(tab.name),
+        langCompartment.of([]),
       ],
     });
 
     const view = new EditorView({ state, parent: containerRef.current });
     viewRef.current = view;
 
+    // Load language extension asynchronously, then inject via compartment
+    let cancelled = false;
+    loadLanguageExtension(tab.name).then((langExt) => {
+      if (!cancelled && langExt.length > 0) {
+        view.dispatch({ effects: langCompartment.reconfigure(langExt) });
+      }
+    });
+
     return () => {
+      cancelled = true;
+      // Security: overwrite document content before destroying to help V8 release plaintext strings
+      try {
+        view.dispatch({
+          changes: { from: 0, to: view.state.doc.length, insert: "" },
+        });
+      } catch {
+        // View may already be detached
+      }
       view.destroy();
       viewRef.current = null;
+      // Pressure GC to reclaim string heap — allocate and discard large ArrayBuffers
+      pressureGC();
     };
   }, [content, tab?.name]);
 

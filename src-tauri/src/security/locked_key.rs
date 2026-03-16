@@ -100,30 +100,6 @@ impl LockedKey {
     }
 }
 
-/// Deref unmasks into a temporary — but this leaves the key on the stack.
-/// Prefer `use_key()` for security-critical paths. Deref is kept for
-/// backward compatibility with code that reads `&[u8; 32]`.
-impl std::ops::Deref for LockedKey {
-    type Target = [u8; 32];
-
-    fn deref(&self) -> &[u8; 32] {
-        // SAFETY: We can't return a reference to a temporary, so we must
-        // store the unmasked value somewhere. We use the masked_data field
-        // itself temporarily — but this breaks the masking invariant.
-        // For truly secure access, callers should use `use_key()` instead.
-        //
-        // This implementation unmasks in-place for Deref, which means the
-        // real key is briefly visible. This is acceptable because Deref is
-        // used in non-security-critical display/test code.
-        //
-        // We can't do better without changing the API. The masked_data is
-        // already mlock'd so it won't be swapped.
-        //
-        // TODO: Migrate all callers to use_key() and remove Deref.
-        &self.masked_data // Returns masked bytes — callers needing real key should use use_key()
-    }
-}
-
 impl Drop for LockedKey {
     fn drop(&mut self) {
         self.masked_data.zeroize();

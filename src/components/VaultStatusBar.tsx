@@ -29,9 +29,9 @@ export function VaultStatusBar() {
   const isBusy = busyCount > 0;
 
   return (
-    <div className="flex items-center gap-4 px-3 py-1 bg-gray-900 border-t border-gray-800 text-xs text-gray-500">
+    <div className="flex items-center gap-4 px-3 py-1 bg-gray-900 border-t border-gray-800 text-xs text-gray-500" role="status" aria-live="polite" aria-label="Vault status bar">
       <span className="flex items-center gap-1.5">
-        <span className={`w-1.5 h-1.5 rounded-full ${isBusy ? "bg-amber-400 animate-pulse" : "bg-green-500"}`} />
+        <span className={`w-1.5 h-1.5 rounded-full ${isBusy ? "bg-amber-400 animate-pulse" : "bg-green-500"}`} aria-hidden="true" />
         {isBusy ? (statusText || "Working...") : "Unlocked"}
       </span>
       {vaultInfo && (

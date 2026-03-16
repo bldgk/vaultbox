@@ -43,16 +43,17 @@ export function ConfirmDialog({
   if (!open) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center">
+    <div className="fixed inset-0 z-50 flex items-center justify-center" role="dialog" aria-modal="true" aria-labelledby="confirm-dialog-title">
       {/* Backdrop */}
       <div
         className="absolute inset-0 bg-black/60 backdrop-blur-sm"
         onClick={onCancel}
+        aria-hidden="true"
       />
 
       {/* Dialog */}
       <div className="relative bg-gray-900 border border-gray-800 rounded-xl shadow-2xl w-96 max-w-[90vw] p-5">
-        <h2 className="text-white text-sm font-semibold mb-2">{title}</h2>
+        <h2 id="confirm-dialog-title" className="text-white text-sm font-semibold mb-2">{title}</h2>
         <p className="text-gray-400 text-sm mb-5 leading-relaxed">{message}</p>
 
         <div className="flex gap-2 justify-end">

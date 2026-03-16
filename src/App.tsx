@@ -29,15 +29,17 @@ function App() {
   const hasOpenTabs = openTabs.length > 0;
 
   return (
-    <div className="flex flex-col h-screen bg-gray-950 text-white select-none">
+    <div className="flex flex-col h-screen bg-gray-950 text-white select-none" role="application" aria-label="VaultBox">
       <Toolbar />
       <Breadcrumb />
-      <div className="flex flex-1 overflow-hidden">
+      <main className="flex flex-1 overflow-hidden">
         {!fileTreeCollapsed && <FileTree />}
         <button
           onClick={toggleFileTree}
           className="shrink-0 w-5 flex items-center justify-center bg-gray-900 border-r border-gray-800 hover:bg-gray-800 transition-colors text-gray-500 hover:text-gray-300"
           title={fileTreeCollapsed ? "Show folders" : "Hide folders"}
+          aria-label={fileTreeCollapsed ? "Show folders" : "Hide folders"}
+          aria-expanded={!fileTreeCollapsed}
         >
           <svg
             className={`w-3 h-3 transition-transform ${fileTreeCollapsed ? "rotate-180" : ""}`}
@@ -54,6 +56,8 @@ function App() {
             onClick={toggleFileList}
             className="shrink-0 w-5 flex items-center justify-center bg-gray-900 border-x border-gray-800 hover:bg-gray-800 transition-colors text-gray-500 hover:text-gray-300"
             title={fileListCollapsed ? "Show file list" : "Hide file list"}
+            aria-label={fileListCollapsed ? "Show file list" : "Hide file list"}
+            aria-expanded={!fileListCollapsed}
           >
             <svg
               className={`w-3 h-3 transition-transform ${fileListCollapsed ? "rotate-180" : ""}`}
@@ -68,7 +72,7 @@ function App() {
         {!(hasOpenTabs && fileListCollapsed) && <FileList />}
         <FileInfoPanel />
         <ViewerPanel />
-      </div>
+      </main>
       <VaultStatusBar />
       <FullscreenViewer />
       {confirmDialog && (

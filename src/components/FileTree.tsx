@@ -46,11 +46,14 @@ export function FileTree() {
   }, [refreshCounter, loadChildren]);
 
   return (
-    <div className="w-56 bg-gray-900 border-r border-gray-800 overflow-y-auto text-sm shrink-0">
-      <div className="px-3 py-2 text-gray-500 text-xs uppercase tracking-wide font-medium">
+    <nav className="w-56 bg-gray-900 border-r border-gray-800 overflow-y-auto text-sm shrink-0" aria-label="Folder tree">
+      <div className="px-3 py-2 text-gray-500 text-xs uppercase tracking-wide font-medium" aria-hidden="true">
         Folders
       </div>
+      <div role="tree" aria-label="Vault folders">
       <button
+        role="treeitem"
+        aria-selected={currentPath === ""}
         onClick={() => navigateTo("")}
         className={`w-full text-left px-3 py-1.5 flex items-center gap-2 ${
           currentPath === "" ? "bg-indigo-900/30 text-indigo-300" : "text-gray-400 hover:bg-gray-800 hover:text-white"
@@ -71,7 +74,8 @@ export function FileTree() {
           loadChildren={loadChildren}
         />
       ))}
-    </div>
+      </div>
+    </nav>
   );
 }
 
@@ -101,7 +105,7 @@ function TreeNodeComponent({
   };
 
   return (
-    <div>
+    <div role="treeitem" aria-expanded={expanded} aria-selected={isActive} aria-label={node.name}>
       <button
         className={`w-full text-left px-3 py-1 flex items-center gap-1.5 ${
           isActive ? "bg-indigo-900/30 text-indigo-300" : "text-gray-400 hover:bg-gray-800 hover:text-white"
@@ -109,9 +113,11 @@ function TreeNodeComponent({
         style={{ paddingLeft: `${depth * 12 + 12}px` }}
         onClick={() => navigateTo(node.path)}
         onDoubleClick={handleToggle}
+        tabIndex={0}
       >
         <span
           role="button"
+          aria-label={expanded ? "Collapse folder" : "Expand folder"}
           onClick={(e) => { e.stopPropagation(); handleToggle(); }}
           className="p-0.5 -ml-1 hover:bg-gray-700 rounded"
         >
@@ -128,7 +134,7 @@ function TreeNodeComponent({
         </svg>
         <span className="truncate">{node.name}</span>
       </button>
-      {expanded && children && children.map((child) => (
+      {expanded && children && <div role="group">{children.map((child) => (
         <TreeNodeComponent
           key={child.path}
           node={child}
@@ -137,7 +143,7 @@ function TreeNodeComponent({
           navigateTo={navigateTo}
           loadChildren={loadChildren}
         />
-      ))}
+      ))}</div>}
     </div>
   );
 }

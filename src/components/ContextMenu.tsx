@@ -45,14 +45,15 @@ export function ContextMenu({ x, y, items, onClose }: ContextMenuProps) {
   };
 
   return (
-    <div ref={ref} style={style} className="bg-gray-800 border border-gray-700 rounded-lg shadow-xl py-1 min-w-[160px]">
+    <div ref={ref} style={style} className="bg-gray-800 border border-gray-700 rounded-lg shadow-xl py-1 min-w-[160px]" role="menu">
       {items.map((item, i) => (
         <div key={i}>
-          {item.divider && <div className="border-t border-gray-700 my-1" />}
+          {item.divider && <div className="border-t border-gray-700 my-1" role="separator" />}
           {item.children ? (
             <SubMenuItem item={item} onClose={onClose} />
           ) : (
             <button
+              role="menuitem"
               className={`w-full px-3 py-1.5 text-left text-sm flex items-center gap-2 ${
                 item.danger
                   ? "text-red-400 hover:bg-red-900/30"

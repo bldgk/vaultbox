@@ -59,7 +59,14 @@ export function FileList() {
           startBusy(`Importing ${paths.length} file(s)...`);
           importFiles(paths, currentPath)
             .then(() => useFileStore.getState().refresh())
-            .catch(() => {})
+            .catch((err) => {
+              useDialogStore.getState().showConfirm({
+                title: "Error",
+                message: `Import failed: ${err}`,
+                confirmLabel: "OK",
+                onConfirm: () => {},
+              });
+            })
             .finally(() => stopBusy());
         }
       } else if (event.payload.type === "leave") {

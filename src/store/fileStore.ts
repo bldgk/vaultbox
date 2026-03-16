@@ -1,6 +1,20 @@
 import { create } from "zustand";
 import type { FileEntry, FileContent } from "../hooks/useTauriCommands";
 
+/**
+ * Pressure V8's GC to reclaim unreachable string heap memory
+ * after closing tabs that held decrypted plaintext.
+ */
+function pressureGC() {
+  try {
+    for (let i = 0; i < 3; i++) {
+      void new ArrayBuffer(32 * 1024 * 1024); // 32 MB
+    }
+  } catch {
+    // Allocation failure is fine
+  }
+}
+
 export interface OpenTab {
   path: string;
   name: string;
@@ -143,6 +157,8 @@ export const useFileStore = create<FileStore>((set) => ({
       if (splitIndex === index) splitIndex = -1;
       else if (splitIndex > index) splitIndex--;
       if (splitIndex >= tabs.length) splitIndex = -1;
+      // Pressure GC to reclaim decrypted plaintext from the closed tab
+      setTimeout(pressureGC, 0);
       return { openTabs: tabs, activeTabIndex: activeIndex, splitTabIndex: splitIndex };
     }),
 
@@ -239,7 +255,12 @@ export const useFileStore = create<FileStore>((set) => ({
     })),
   setSplitTab: (index) => set({ splitTabIndex: index }),
 
-  reset: () =>
+  reset: () => {
+    // Null out all tab contents before resetting to release decrypted data
+    const { openTabs } = useFileStore.getState();
+    for (const tab of openTabs) {
+      tab.content = null;
+    }
     set({
       currentPath: "",
       refreshCounter: 0,
@@ -261,5 +282,8 @@ export const useFileStore = create<FileStore>((set) => ({
       fileListCollapsed: false,
       splitView: false,
       splitTabIndex: -1,
-    }),
+    });
+    // Pressure GC to reclaim all decrypted plaintext
+    setTimeout(pressureGC, 0);
+  },
 }));

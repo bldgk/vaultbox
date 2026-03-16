@@ -1,23 +1,36 @@
-import { useState, useRef, useCallback } from "react";
+import { useState, useRef, useCallback, lazy, Suspense } from "react";
 import { useFileStore, OpenTab } from "../store/fileStore";
 import { getViewerType } from "../lib/fileTypes";
-import { TextEditor } from "./viewers/TextEditor";
 import { ImageViewer } from "./viewers/ImageViewer";
 import { MediaViewer } from "./viewers/MediaViewer";
 import { HexViewer } from "./viewers/HexViewer";
-import { PdfViewer } from "./viewers/PdfViewer";
 import { ArchiveViewer } from "./viewers/ArchiveViewer";
+
+const TextEditor = lazy(() => import("./viewers/TextEditor").then(m => ({ default: m.TextEditor })));
+const PdfViewer = lazy(() => import("./viewers/PdfViewer").then(m => ({ default: m.PdfViewer })));
+
+const ViewerFallback = () => (
+  <div className="flex-1 flex items-center justify-center text-gray-500 text-sm">Loading...</div>
+);
 
 function renderViewer(tab: OpenTab, tabIndex: number) {
   const viewerType = getViewerType(tab.name);
   const effectiveType = tab.content?.type === "Text" ? "text" : viewerType;
   return (
     <>
-      {effectiveType === "text" && <TextEditor tabIndex={tabIndex} />}
+      {effectiveType === "text" && (
+        <Suspense fallback={<ViewerFallback />}>
+          <TextEditor tabIndex={tabIndex} />
+        </Suspense>
+      )}
       {effectiveType === "image" && <ImageViewer tabIndex={tabIndex} />}
       {effectiveType === "media" && <MediaViewer tabIndex={tabIndex} />}
       {effectiveType === "archive" && <ArchiveViewer tabIndex={tabIndex} />}
-      {effectiveType === "pdf" && <PdfViewer tabIndex={tabIndex} />}
+      {effectiveType === "pdf" && (
+        <Suspense fallback={<ViewerFallback />}>
+          <PdfViewer tabIndex={tabIndex} />
+        </Suspense>
+      )}
       {effectiveType === "hex" && <HexViewer tabIndex={tabIndex} />}
     </>
   );

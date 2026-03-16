@@ -146,7 +146,7 @@ export function PdfViewer({ tabIndex }: { tabIndex: number }) {
         renderTasksRef.current.delete(pageNum);
       } catch (err: unknown) {
         if (err instanceof Error && err.message !== "Rendering cancelled") {
-          console.error(`Error rendering page ${pageNum}:`, err);
+          setError(`Error rendering page ${pageNum}: ${err.message}`);
         }
       }
     },

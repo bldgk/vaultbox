@@ -163,7 +163,7 @@ export function FullscreenViewer() {
   const hasNext = currentIndex < previewableFiles.length - 1;
 
   return (
-    <div className="fixed inset-0 z-[100] bg-black flex flex-col select-none">
+    <div className="fixed inset-0 z-[100] bg-black flex flex-col select-none" role="dialog" aria-modal="true" aria-label={`Fullscreen preview: ${fullscreenPreview.fileName}`}>
       {/* Top bar */}
       <div className="flex items-center justify-between px-4 py-2 bg-black/80 text-white z-10">
         <span className="text-sm text-gray-300 truncate max-w-[50%]">
@@ -194,8 +194,9 @@ export function FullscreenViewer() {
             onClick={() => setFullscreenPreview(null)}
             className="p-1.5 rounded hover:bg-white/10 text-gray-300"
             title="Close (Esc)"
+            aria-label="Close preview"
           >
-            <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
             </svg>
           </button>
@@ -320,6 +321,7 @@ export function FullscreenViewer() {
           onClick={goPrev}
           className="absolute left-4 top-1/2 -translate-y-1/2 p-3 rounded-full bg-black/50 hover:bg-black/80 text-white/70 hover:text-white transition z-10"
           title="Previous (Left arrow)"
+          aria-label="Previous file"
         >
           <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
@@ -331,6 +333,7 @@ export function FullscreenViewer() {
           onClick={goNext}
           className="absolute right-4 top-1/2 -translate-y-1/2 p-3 rounded-full bg-black/50 hover:bg-black/80 text-white/70 hover:text-white transition z-10"
           title="Next (Right arrow)"
+          aria-label="Next file"
         >
           <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />

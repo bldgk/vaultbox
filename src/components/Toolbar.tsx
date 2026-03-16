@@ -69,13 +69,14 @@ export function Toolbar() {
   };
 
   return (
-    <div className="flex items-center gap-2 px-3 py-2 bg-gray-900 border-b border-gray-800">
+    <div className="flex items-center gap-2 px-3 py-2 bg-gray-900 border-b border-gray-800" role="toolbar" aria-label="Vault toolbar">
       {/* Navigation */}
       <button
         onClick={goBack}
         disabled={historyIndex <= 0}
         className="p-1.5 rounded hover:bg-gray-800 disabled:opacity-30 text-gray-400"
         title="Back"
+        aria-label="Go back"
       >
         <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" /></svg>
       </button>
@@ -84,6 +85,7 @@ export function Toolbar() {
         disabled={historyIndex >= navigationHistory.length - 1}
         className="p-1.5 rounded hover:bg-gray-800 disabled:opacity-30 text-gray-400"
         title="Forward"
+        aria-label="Go forward"
       >
         <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" /></svg>
       </button>
@@ -94,6 +96,9 @@ export function Toolbar() {
           onClick={() => setShowNewMenu(!showNewMenu)}
           className="p-1.5 rounded hover:bg-gray-800 text-gray-400"
           title="New"
+          aria-label="Create new file or folder"
+          aria-expanded={showNewMenu}
+          aria-haspopup="true"
         >
           <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" /></svg>
         </button>
@@ -124,6 +129,7 @@ export function Toolbar() {
         }}
         className="p-1.5 rounded hover:bg-gray-800 text-gray-400"
         title="Import files"
+        aria-label="Import files"
       >
         <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" /></svg>
       </button>
@@ -133,6 +139,7 @@ export function Toolbar() {
         onClick={() => setViewMode(viewMode === "list" ? "grid" : "list")}
         className="p-1.5 rounded hover:bg-gray-800 text-gray-400"
         title={viewMode === "list" ? "Grid view" : "List view"}
+        aria-label={viewMode === "list" ? "Switch to grid view" : "Switch to list view"}
       >
         {viewMode === "list" ? (
           <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6zm10 0a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V6zM4 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2v-2zm10 0a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2v-2z" /></svg>
@@ -144,13 +151,14 @@ export function Toolbar() {
       <div className="flex-1" />
 
       {/* Search */}
-      <div className="flex gap-1">
+      <div className="flex gap-1" role="search">
         <input
-          type="text"
+          type="search"
           value={searchQuery}
           onChange={(e) => setSearchQuery(e.target.value)}
           onKeyDown={(e) => e.key === "Enter" && handleSearch()}
           placeholder="Search files..."
+          aria-label="Search files"
           className="px-2 py-1 bg-gray-800 border border-gray-700 rounded text-sm text-white placeholder-gray-500 w-48 focus:outline-none focus:border-indigo-500"
         />
       </div>
@@ -160,21 +168,23 @@ export function Toolbar() {
         onClick={handleLock}
         className="p-1.5 rounded hover:bg-red-900/50 text-gray-400 hover:text-red-400"
         title="Lock vault"
+        aria-label="Lock vault"
       >
         <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" /></svg>
       </button>
 
       {/* New name dialog */}
       {newType && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" role="dialog" aria-modal="true" aria-labelledby="new-item-title">
           <div className="bg-gray-900 border border-gray-700 rounded-xl p-4 w-80">
-            <h3 className="text-white text-sm font-medium mb-3">
+            <h3 id="new-item-title" className="text-white text-sm font-medium mb-3">
               New {newType === "file" ? "File" : "Folder"}
             </h3>
             <input
               autoFocus
               type="text"
               value={newName}
+              aria-label={newType === "file" ? "File name" : "Folder name"}
               onChange={(e) => setNewName(e.target.value)}
               onKeyDown={(e) => {
                 if (e.key === "Enter") handleCreateSubmit();

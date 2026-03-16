@@ -1,4 +1,5 @@
 import { useVaultStore } from "./store/vaultStore";
+import { useFileStore } from "./store/fileStore";
 import { useDialogStore } from "./store/dialogStore";
 import { UnlockDialog } from "./components/dialogs/UnlockDialog";
 import { ConfirmDialog } from "./components/dialogs/ConfirmDialog";
@@ -17,6 +18,7 @@ import "./App.css";
 function App() {
   const { status } = useVaultStore();
   const { confirmDialog, hideConfirm } = useDialogStore();
+  const { fileListCollapsed, toggleFileList, openTabs } = useFileStore();
   useAutoLock();
   useKeyboardShortcuts();
 
@@ -24,13 +26,32 @@ function App() {
     return <UnlockDialog />;
   }
 
+  const hasOpenTabs = openTabs.length > 0;
+
   return (
     <div className="flex flex-col h-screen bg-gray-950 text-white select-none">
       <Toolbar />
       <Breadcrumb />
       <div className="flex flex-1 overflow-hidden">
         <FileTree />
-        <FileList />
+        {/* Collapse/expand toggle — only show when tabs are open */}
+        {hasOpenTabs && (
+          <button
+            onClick={toggleFileList}
+            className="shrink-0 w-5 flex items-center justify-center bg-gray-900 border-x border-gray-800 hover:bg-gray-800 transition-colors text-gray-500 hover:text-gray-300"
+            title={fileListCollapsed ? "Show file list" : "Hide file list"}
+          >
+            <svg
+              className={`w-3 h-3 transition-transform ${fileListCollapsed ? "rotate-180" : ""}`}
+              fill="none"
+              viewBox="0 0 24 24"
+              stroke="currentColor"
+            >
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+            </svg>
+          </button>
+        )}
+        {!(hasOpenTabs && fileListCollapsed) && <FileList />}
         <FileInfoPanel />
         <ViewerPanel />
       </div>

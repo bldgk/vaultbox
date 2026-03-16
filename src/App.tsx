@@ -18,7 +18,7 @@ import "./App.css";
 function App() {
   const { status } = useVaultStore();
   const { confirmDialog, hideConfirm } = useDialogStore();
-  const { fileListCollapsed, toggleFileList, openTabs } = useFileStore();
+  const { fileTreeCollapsed, toggleFileTree, fileListCollapsed, toggleFileList, openTabs } = useFileStore();
   useAutoLock();
   useKeyboardShortcuts();
 
@@ -33,7 +33,21 @@ function App() {
       <Toolbar />
       <Breadcrumb />
       <div className="flex flex-1 overflow-hidden">
-        <FileTree />
+        {!fileTreeCollapsed && <FileTree />}
+        <button
+          onClick={toggleFileTree}
+          className="shrink-0 w-5 flex items-center justify-center bg-gray-900 border-r border-gray-800 hover:bg-gray-800 transition-colors text-gray-500 hover:text-gray-300"
+          title={fileTreeCollapsed ? "Show folders" : "Hide folders"}
+        >
+          <svg
+            className={`w-3 h-3 transition-transform ${fileTreeCollapsed ? "rotate-180" : ""}`}
+            fill="none"
+            viewBox="0 0 24 24"
+            stroke="currentColor"
+          >
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+          </svg>
+        </button>
         {/* Collapse/expand toggle — only show when tabs are open */}
         {hasOpenTabs && (
           <button

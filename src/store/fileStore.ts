@@ -41,6 +41,7 @@ interface FileStore {
   clipboard: ClipboardState | null;
   fullscreenPreview: FullscreenPreview | null;
   showInfoPanel: boolean;
+  fileTreeCollapsed: boolean;
   fileListCollapsed: boolean;
   splitView: boolean;
   splitTabIndex: number;
@@ -70,6 +71,7 @@ interface FileStore {
   reorderTab: (fromIndex: number, toIndex: number) => void;
   setFullscreenPreview: (preview: FullscreenPreview | null) => void;
   toggleInfoPanel: () => void;
+  toggleFileTree: () => void;
   toggleFileList: () => void;
   toggleSplitView: () => void;
   setSplitTab: (index: number) => void;
@@ -96,6 +98,7 @@ export const useFileStore = create<FileStore>((set) => ({
   clipboard: null,
   fullscreenPreview: null,
   showInfoPanel: false,
+  fileTreeCollapsed: false,
   fileListCollapsed: false,
   splitView: false,
   splitTabIndex: -1,
@@ -227,6 +230,7 @@ export const useFileStore = create<FileStore>((set) => ({
   setClipboard: (clipboard) => set({ clipboard }),
   setFullscreenPreview: (preview) => set({ fullscreenPreview: preview }),
   toggleInfoPanel: () => set((state) => ({ showInfoPanel: !state.showInfoPanel })),
+  toggleFileTree: () => set((state) => ({ fileTreeCollapsed: !state.fileTreeCollapsed })),
   toggleFileList: () => set((state) => ({ fileListCollapsed: !state.fileListCollapsed })),
   toggleSplitView: () =>
     set((state) => ({
@@ -253,6 +257,7 @@ export const useFileStore = create<FileStore>((set) => ({
       clipboard: null,
       fullscreenPreview: null,
       showInfoPanel: false,
+      fileTreeCollapsed: false,
       fileListCollapsed: false,
       splitView: false,
       splitTabIndex: -1,

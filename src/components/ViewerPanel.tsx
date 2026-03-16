@@ -94,7 +94,7 @@ export function ViewerPanel() {
   const splitTab = splitTabIndex >= 0 ? openTabs[splitTabIndex] : null;
 
   return (
-    <div className="flex flex-col border-l border-gray-800 w-[50%] min-w-[300px]">
+    <div className="flex flex-col border-l border-gray-800 flex-1 min-w-[300px]">
       {/* Tab bar */}
       <div className="flex bg-gray-900 border-b border-gray-800">
         <div ref={tabBarRef} className="flex overflow-x-auto flex-1">

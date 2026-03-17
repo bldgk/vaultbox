@@ -20,13 +20,14 @@ Cryptographic compatibility with gocryptfs v2 is verified by cross-validation te
 - Zero plaintext on disk — everything stays in memory
 
 ### File Viewers
-- **Text editor** — CodeMirror 6 with syntax highlighting for 15+ languages, Cmd+S to save
+- **Text editor** — CodeMirror 6 with syntax highlighting for 15+ languages, Cmd+S to save; each tab runs in an isolated webview for V8 heap isolation
 - **Markdown preview** — Live split-view rendering with toggle button
 - **PDF viewer** — pdfjs-dist with zoom, fit-width/fit-page, page navigation, scroll tracking
 - **Image viewer** — Inline preview with fullscreen mode, zoom, pan, double-click to toggle
 - **Media player** — Streaming video/audio via `vaultmedia://` protocol with HTTP Range support
 - **Archive viewer** — Browse .zip contents with tree view; extract individual files or all to vault/disk
 - **Hex viewer** — Binary inspection with offset/hex/ASCII display
+- Files up to 2 GB can be opened in-app; larger files can be exported to disk
 
 ### File Operations
 - Create, rename, copy, move, delete, import, export
@@ -42,6 +43,7 @@ Cryptographic compatibility with gocryptfs v2 is verified by cross-validation te
 - Image gallery — fullscreen thumbnail strip with keyboard navigation (arrows, Home, End)
 - File info panel (Cmd+I) — file type, size, dates, path, image preview
 - Custom confirm dialogs for all destructive actions
+- ARIA labels, roles, and keyboard navigation across all interactive elements
 - Dark theme (gray-950), Tailwind CSS v4
 
 ## Security Model
@@ -59,9 +61,11 @@ VaultBox is designed to keep decrypted data isolated to a single process, unlike
 
 | Protection | How | Platform |
 |------------|-----|----------|
+| Isolated webviews | Each text editor tab runs in a separate child webview; closing a tab destroys the entire V8 heap, reclaiming all decrypted content | All |
 | XOR-masked keys | Keys stored as `masked = key ⊕ random_mask`; unmasked only during crypto operations (microseconds), then re-masked with fresh random pad | All |
 | mlock | All key material and plaintext cache entries pinned in RAM via `mlock()` / `VirtualLock()` — never swapped to disk | All |
 | Zeroize on drop | Keys, passwords, decrypted buffers zeroed via volatile writes (`zeroize` crate) — compiler cannot optimize away | All |
+| GC pressure on close | Tab close and vault lock overwrite editor document content and allocate throwaway buffers to encourage V8 garbage collection | All |
 | Core dumps disabled | `setrlimit(RLIMIT_CORE, 0)` at startup | Unix |
 | Anti-ptrace | `prctl(PR_SET_DUMPABLE, 0)` — blocks `/proc/pid/mem` reads and `ptrace` attach from same-user processes | Linux |
 
@@ -103,17 +107,17 @@ All vault content is rendered safely — no user-supplied scripts can execute:
 
 ### Known limitations
 
-- WebView holds internal copies of DOM input values and rendered content — not controllable from application code
-- JavaScript strings are immutable and GC'd, not zeroized — decrypted text in open editor tabs persists in JS heap until GC collects
+- JavaScript strings are immutable and GC'd, not zeroized — decrypted text in open editor tabs persists in isolated webview JS heap until the tab is closed (destroying the webview)
 - On Windows, `ReadProcessMemory` from a same-user process can read VaultBox memory; XOR masking makes this harder but not impossible for a targeted attacker
-- CodeMirror editor maintains internal copies of document content in JS heap
+- CodeMirror editor maintains internal copies of document content in JS heap (mitigated by isolated webviews — each editor gets its own heap)
 
 ## Architecture
 
 - **Frontend**: React 19 + TypeScript + Tailwind CSS 4 + CodeMirror 6 + pdfjs-dist
 - **Backend**: Rust (Tauri v2) handling all crypto operations
+- **Webviews**: Multi-webview architecture (Tauri v2 `unstable` feature) — each text editor tab runs in a separate child webview for V8 heap isolation
 - **Crypto**: AES-256-GCM (128-bit nonces) content encryption, EME (ECB-Mix-ECB) filename encryption, scrypt + HKDF-SHA256 key derivation
-- **IPC**: Tauri `invoke()` — in-process, not over network sockets
+- **IPC**: Tauri `invoke()` — in-process, not over network sockets; cross-webview communication via Tauri events
 - **Media**: Custom `vaultmedia://` protocol for streaming decrypted video/audio with HTTP Range support
 
 ## Prerequisites
@@ -140,11 +144,15 @@ The bundled app will be in `src-tauri/target/release/bundle/`.
 ## Tests
 
 ```bash
+# Rust tests
 cd src-tauri
 cargo test
+
+# Frontend tests
+npm test
 ```
 
-337 tests across 7 test suites:
+362 tests across 8 test suites:
 
 | Suite | Tests | What's covered |
 |-------|------:|----------------|
@@ -154,6 +162,7 @@ cargo test
 | `memory_security` | 22 | Zeroize verification via raw pointers (decrypt results, derived keys, LockedKey temporaries), mlock lifecycle, key isolation, no plaintext leakage in ciphertext/filenames, scrypt brute-force resistance, XOR-masked key roundtrips |
 | `gocryptfs_compat` | 6 | Cross-validation with real gocryptfs binary: VaultBox decrypts gocryptfs-created files, gocryptfs decrypts VaultBox-created files, config/key derivation compatibility |
 | `debug_kdf` | 3 | Step-by-step KDF comparison with Go output (scrypt → HKDF → GCM → master key), pure HKDF vector validation |
+| Frontend (Vitest) | 25 | React component rendering, file store state management, file type detection, viewer selection logic |
 
 ### Fuzz testing
 

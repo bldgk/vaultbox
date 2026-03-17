@@ -5,24 +5,40 @@ import { ImageViewer } from "./viewers/ImageViewer";
 import { MediaViewer } from "./viewers/MediaViewer";
 import { HexViewer } from "./viewers/HexViewer";
 import { ArchiveViewer } from "./viewers/ArchiveViewer";
+import { IsolatedViewerSlot } from "./IsolatedViewerSlot";
 
-const TextEditor = lazy(() => import("./viewers/TextEditor").then(m => ({ default: m.TextEditor })));
 const PdfViewer = lazy(() => import("./viewers/PdfViewer").then(m => ({ default: m.PdfViewer })));
 
 const ViewerFallback = () => (
   <div className="flex-1 flex items-center justify-center text-gray-500 text-sm">Loading...</div>
 );
 
-function renderViewer(tab: OpenTab, tabIndex: number) {
+/**
+ * Generate a stable, unique webview label for a tab.
+ * Labels may only contain alphanumeric, dash, slash, colon, underscore.
+ */
+function viewerLabel(tab: OpenTab, suffix: string): string {
+  const safe = tab.path.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 60);
+  return `viewer-${suffix}-${safe}`;
+}
+
+function renderViewer(tab: OpenTab, tabIndex: number, slotSuffix: string) {
   const viewerType = getViewerType(tab.name);
   const effectiveType = tab.content?.type === "Text" ? "text" : viewerType;
+
+  // Text files use isolated webviews for V8 heap isolation
+  if (effectiveType === "text") {
+    return (
+      <IsolatedViewerSlot
+        tab={tab}
+        tabIndex={tabIndex}
+        label={viewerLabel(tab, slotSuffix)}
+      />
+    );
+  }
+
   return (
     <>
-      {effectiveType === "text" && (
-        <Suspense fallback={<ViewerFallback />}>
-          <TextEditor tabIndex={tabIndex} />
-        </Suspense>
-      )}
       {effectiveType === "image" && <ImageViewer tabIndex={tabIndex} />}
       {effectiveType === "media" && <MediaViewer tabIndex={tabIndex} />}
       {effectiveType === "archive" && <ArchiveViewer tabIndex={tabIndex} />}
@@ -171,7 +187,7 @@ export function ViewerPanel() {
               {activeTab ? activeTab.name : "No file"}
             </div>
             <div className="flex-1 overflow-hidden">
-              {activeTab && renderViewer(activeTab, activeTabIndex)}
+              {activeTab && renderViewer(activeTab, activeTabIndex, "main")}
             </div>
           </div>
           {/* Vertical divider */}
@@ -183,7 +199,7 @@ export function ViewerPanel() {
             </div>
             <div className="flex-1 overflow-hidden">
               {splitTab ? (
-                renderViewer(splitTab, splitTabIndex)
+                renderViewer(splitTab, splitTabIndex, "split")
               ) : (
                 <div className="flex items-center justify-center h-full text-gray-600 text-sm">
                   <p>Alt+click a tab to open here</p>
@@ -194,7 +210,7 @@ export function ViewerPanel() {
         </div>
       ) : (
         <div className="flex-1 overflow-hidden">
-          {activeTab && renderViewer(activeTab, activeTabIndex)}
+          {activeTab && renderViewer(activeTab, activeTabIndex, "main")}
         </div>
       )}
     </div>

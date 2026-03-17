@@ -24,7 +24,7 @@ function pressureGC() {
   }
 }
 
-async function loadLanguageExtension(filename: string): Promise<Extension[]> {
+export async function loadLanguageExtension(filename: string): Promise<Extension[]> {
   const ext = filename.split(".").pop()?.toLowerCase() ?? "";
   switch (ext) {
     case "js": case "jsx": {
@@ -95,7 +95,7 @@ function escapeHtml(text: string): string {
     .replace(/"/g, "&quot;");
 }
 
-function renderMarkdown(text: string): string {
+export function renderMarkdown(text: string): string {
   const lines = text.split("\n");
   const htmlParts: string[] = [];
   let i = 0;

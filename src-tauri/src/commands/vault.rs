@@ -125,20 +125,39 @@ pub async fn create_vault(
     // Zeroize password bytes immediately after scrypt
     password.zeroize();
 
-    // Encrypt master key with wrapping key using 16-byte nonce (GCMIV128)
+    // Derive the GCM wrapping key from the scrypt hash via HKDF, matching gocryptfs behavior.
+    // gocryptfs passes the scrypt hash through its ContentEnc, which applies HKDF when the
+    // HKDF flag is set: HKDF-SHA256(salt=nil, IKM=scrypt_hash, info="AES-GCM file content encryption").
     use aes::Aes256;
     use aes_gcm::aead::consts::U16;
+    use hkdf::Hkdf;
+    use sha2::Sha256;
     type Aes256Gcm16 = aes_gcm::AesGcm<Aes256, U16>;
 
-    let cipher = Aes256Gcm16::new_from_slice(wrapping_key.as_ref())
+    let wrapping_gcm_key = {
+        let hk = Hkdf::<Sha256>::new(None, wrapping_key.as_ref());
+        let mut derived = Zeroizing::new([0u8; 32]);
+        hk.expand(b"AES-GCM file content encryption", derived.as_mut())
+            .map_err(|_| "HKDF key derivation failed")?;
+        derived
+    };
+
+    let cipher = Aes256Gcm16::new_from_slice(wrapping_gcm_key.as_ref())
         .map_err(|_| "Failed to create cipher")?;
 
     let mut nonce_bytes = [0u8; 16]; // 16-byte nonce for GCMIV128
     rand::rng().fill_bytes(&mut nonce_bytes);
     let nonce = Nonce::from_slice(&nonce_bytes);
 
+    // AAD = blockNo(0) as 8 big-endian bytes, matching gocryptfs DecryptBlock(encrypted_key, 0, nil)
+    use aes_gcm::aead::Payload;
+    let aad = [0u8; 8];
+    let payload = Payload {
+        msg: master_key.as_ref(),
+        aad: &aad,
+    };
     let encrypted_master = cipher
-        .encrypt(nonce, master_key.as_ref() as &[u8])
+        .encrypt(nonce, payload)
         .map_err(|_| "Failed to encrypt master key")?;
 
     // Combine nonce(16) + encrypted key(32+16 tag) = 64 bytes

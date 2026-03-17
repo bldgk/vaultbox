@@ -66,6 +66,10 @@ pub enum FileContent {
     Binary(String), // base64 encoded
 }
 
+/// Maximum file size for Tauri IPC. WebKit's WTF::StringImpl uses 32-bit length
+/// fields, so files at or above 2 GB cannot be serialized safely.
+const MAX_IPC_FILE_SIZE: usize = 2 * 1024 * 1024 * 1024;
+
 fn ensure_unlocked(state: &VaultState) -> Result<(), String> {
     if state.status() != VaultStatus::Unlocked {
         return Err("Vault is locked".to_string());
@@ -122,6 +126,14 @@ pub async fn read_file(
 
     let mut data = ops::read_file(&vault_path, &path, &filename_key, &content_key, raw64)
         .map_err(|e| format!("Failed to read file: {}", e))?;
+
+    if data.len() >= MAX_IPC_FILE_SIZE {
+        let size_mb = data.len() / (1024 * 1024);
+        return Err(format!(
+            "File is too large to open in-app ({} MB). Use File → Export to save it locally and open with an external application.",
+            size_mb,
+        ));
+    }
 
     // Take ownership of plaintext from Zeroizing wrapper (avoids clone)
     let bytes = std::mem::take(&mut *data);

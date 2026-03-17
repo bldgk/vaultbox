@@ -436,6 +436,9 @@ pub fn run() {
             commands::files::export_file,
             commands::clipboard::set_clipboard_timeout,
             commands::clipboard::copy_to_clipboard,
+            commands::webview::create_viewer_webview,
+            commands::webview::close_viewer_webview,
+            commands::webview::resize_viewer_webview,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

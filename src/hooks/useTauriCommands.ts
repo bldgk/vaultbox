@@ -98,3 +98,28 @@ export async function importFiles(externalPaths: string[], vaultDir: string): Pr
 export async function exportFile(vaultPath: string, externalDest: string): Promise<void> {
   return invoke("export_file", { vaultPathStr: vaultPath, externalDest });
 }
+
+// Isolated viewer webview management
+export async function createViewerWebview(
+  label: string,
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+): Promise<void> {
+  return invoke("create_viewer_webview", { label, x, y, width, height });
+}
+
+export async function closeViewerWebview(label: string): Promise<void> {
+  return invoke("close_viewer_webview", { label });
+}
+
+export async function resizeViewerWebview(
+  label: string,
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+): Promise<void> {
+  return invoke("resize_viewer_webview", { label, x, y, width, height });
+}

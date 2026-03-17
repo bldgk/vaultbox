@@ -1,14 +1,12 @@
-//! gocryptfs file content encryption/decryption.
+//! gocryptfs file content encryption/decryption (GCMIV128 mode).
 //!
 //! File format:
 //! - 18-byte header: 2 bytes version (0x00 0x02) + 16 bytes file ID
-//! - Content blocks: each 4096 bytes plaintext → 4112 bytes encrypted (4096 + 16 GCM tag)
+//! - Content blocks: each up to 4096 bytes plaintext → up to 4128 bytes encrypted
+//!   (random IV(16) + ciphertext(up to 4096) + GCM tag(16))
 //!
-//! Nonce construction (per gocryptfs source):
-//!
-//! - Nonce is 12 bytes (96 bits) for GCM-IV128 mode
-//! - Block nonce: take fileID (16 bytes), XOR the block number into the last 8 bytes (big-endian),
-//!   then use the first 12 bytes as the GCM nonce.
+//! Each block stores a random 16-byte nonce (IV) followed by AES-256-GCM ciphertext and tag.
+//! AAD = blockNo (8 bytes big-endian) + fileID (16 bytes) = 24 bytes.
 
 use aes::Aes256;
 use aes_gcm::{
@@ -24,8 +22,8 @@ type Aes256Gcm16 = AesGcm<Aes256, U16>;
 pub const HEADER_LEN: usize = 18;
 pub const FILE_ID_LEN: usize = 16;
 pub const BLOCK_SIZE_PLAIN: usize = 4096;
-/// Cipher block = IV(16) + ciphertext(4096) + GCM tag(16) = 4128
-pub const BLOCK_SIZE_CIPHER: usize = 16 + 4096 + 16; // IV + plaintext + GCM tag
+/// Cipher block = random IV(16) + ciphertext(4096) + GCM tag(16) = 4128
+pub const BLOCK_SIZE_CIPHER: usize = 16 + 4096 + 16; // IV + ciphertext + GCM tag
 const VERSION_BYTES: [u8; 2] = [0x00, 0x02];
 const IV_LEN: usize = 16;
 

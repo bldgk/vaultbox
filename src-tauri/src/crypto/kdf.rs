@@ -59,9 +59,10 @@ pub fn derive_master_key(
     )
     .map_err(|e| KdfError::Scrypt(e.to_string()))?;
 
-    // When HKDF is enabled, gocryptfs derives a separate GCM key from the scrypt hash
-    // using HKDF-SHA256 with the info string "AES-GCM file content encryption".
-    // This same derived key is used both for master key wrapping AND file content encryption.
+    // When HKDF is enabled, gocryptfs derives a GCM key from the scrypt hash via HKDF-SHA256
+    // with info string "AES-GCM file content encryption". This derived key is used for
+    // master key wrapping. (A separate HKDF derivation from the *master* key produces the
+    // actual file content encryption key — see derive_content_key.)
     let gcm_key = if config.uses_hkdf() {
         let hk = Hkdf::<Sha256>::new(None, scrypt_key.as_ref());
         let mut derived = Zeroizing::new([0u8; 32]);

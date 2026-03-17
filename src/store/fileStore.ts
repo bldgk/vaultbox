@@ -59,12 +59,14 @@ interface FileStore {
   fileListCollapsed: boolean;
   splitView: boolean;
   splitTabIndex: number;
+  lastClickedFile: string | null;
 
   setCurrentPath: (path: string) => void;
   refresh: () => void;
   setEntries: (entries: FileEntry[]) => void;
   setSelectedFiles: (files: Set<string>) => void;
   toggleSelection: (name: string, multi: boolean) => void;
+  setLastClickedFile: (name: string | null) => void;
   openTab: (tab: OpenTab) => void;
   closeTab: (index: number) => void;
   setActiveTab: (index: number) => void;
@@ -116,11 +118,14 @@ export const useFileStore = create<FileStore>((set) => ({
   fileListCollapsed: false,
   splitView: false,
   splitTabIndex: -1,
+  lastClickedFile: null,
 
   setCurrentPath: (path) => set({ currentPath: path }),
   refresh: () => set((state) => ({ refreshCounter: state.refreshCounter + 1 })),
   setEntries: (entries) => set({ entries }),
   setSelectedFiles: (files) => set({ selectedFiles: files }),
+
+  setLastClickedFile: (name) => set({ lastClickedFile: name }),
 
   toggleSelection: (name, multi) =>
     set((state) => {
@@ -130,7 +135,7 @@ export const useFileStore = create<FileStore>((set) => ({
       } else {
         newSet.add(name);
       }
-      return { selectedFiles: newSet };
+      return { selectedFiles: newSet, lastClickedFile: name };
     }),
 
   openTab: (tab) =>
@@ -199,6 +204,7 @@ export const useFileStore = create<FileStore>((set) => ({
         navigationHistory: history,
         historyIndex: history.length - 1,
         selectedFiles: new Set(),
+        lastClickedFile: null,
         searchResults: null,
         searchQuery: "",
       };

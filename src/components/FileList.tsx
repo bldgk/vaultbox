@@ -13,7 +13,7 @@ export function FileList() {
     currentPath, refreshCounter, entries, setEntries, selectedFiles, toggleSelection,
     navigateTo, openTab, viewMode, sortBy, sortAsc, setSortBy,
     searchResults, loading, setLoading, clipboard, setClipboard, setFullscreenPreview,
-    startBusy, stopBusy, toggleInfoPanel, setSelectedFiles,
+    startBusy, stopBusy, toggleInfoPanel, setSelectedFiles, lastClickedFile,
   } = useFileStore();
 
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; entry: FileEntry } | null>(null);
@@ -105,6 +105,28 @@ export function FileList() {
   });
 
   const fullPath = (name: string) => currentPath ? `${currentPath}/${name}` : name;
+
+  // Unified click handler: shift=range, ctrl/cmd=toggle, plain=single select
+  const handleItemClick = (e: React.MouseEvent, name: string) => {
+    if (e.shiftKey && lastClickedFile) {
+      // Range select from lastClickedFile to name
+      const anchorIdx = sorted.findIndex((f) => f.name === lastClickedFile);
+      const targetIdx = sorted.findIndex((f) => f.name === name);
+      if (anchorIdx >= 0 && targetIdx >= 0) {
+        const start = Math.min(anchorIdx, targetIdx);
+        const end = Math.max(anchorIdx, targetIdx);
+        const newSet = new Set(e.ctrlKey || e.metaKey ? selectedFiles : []);
+        for (let i = start; i <= end; i++) {
+          newSet.add(sorted[i].name);
+        }
+        setSelectedFiles(newSet);
+        // Don't update lastClickedFile on shift-click (keep anchor)
+        return;
+      }
+    }
+    toggleSelection(name, e.metaKey || e.ctrlKey);
+  };
+
 
   const handleOpen = async (entry: FileEntry) => {
     if (entry.is_dir) {
@@ -350,6 +372,14 @@ export function FileList() {
     });
   };
 
+  const handleBatchMoveTo = (folderName: string) => {
+    const selected = getSelectedEntries().filter((e) => e.name !== folderName);
+    if (selected.length === 0) return;
+    handleMoveToFolder(selected.map((e) => e.name), folderName);
+  };
+
+  const availableFolders = sorted.filter((e) => e.is_dir && !selectedFiles.has(e.name));
+
   const getContextMenuItems = (entry: FileEntry): ContextMenuItem[] => {
     const vType = getViewerType(entry.name);
     const items: ContextMenuItem[] = [
@@ -459,35 +489,51 @@ export function FileList() {
   if (viewMode === "grid") {
     return (
       <div className="flex-1 flex flex-col overflow-hidden relative min-w-0">
-        {selectedFiles.size > 1 && (
+        {selectedFiles.size > 0 && (
           <BatchActionBar
             count={selectedFiles.size}
             onExport={handleBatchExport}
             onDelete={handleBatchDelete}
             onCopy={handleBatchCopy}
+            folders={availableFolders}
+            onMoveTo={handleBatchMoveTo}
+            onDeselect={() => setSelectedFiles(new Set())}
           />
         )}
         <div className="flex-1 overflow-auto p-3" onClick={() => setContextMenu(null)}>
           {isDragOver && <DragOverlay />}
           <div className="grid grid-cols-[repeat(auto-fill,minmax(100px,1fr))] gap-2">
             {sorted.map((entry) => (
-              <button
+              <div
                 key={entry.name}
-                className={`flex flex-col items-center gap-1 p-3 rounded-lg text-center transition ${
+                className={`relative flex flex-col items-center gap-1 p-3 rounded-lg text-center transition cursor-pointer ${
                   selectedFiles.has(entry.name)
                     ? "bg-indigo-900/50 ring-1 ring-indigo-500"
                     : "hover:bg-gray-800"
                 }`}
-                onClick={(e) => toggleSelection(entry.name, e.metaKey || e.ctrlKey)}
-                onDoubleClick={() => handleOpen(entry)}
+                onClick={(e) => handleItemClick(e, entry.name)}
+                onDoubleClick={(e) => {
+                  if ((e.target as HTMLElement).closest("input[type=checkbox]")) return;
+                  handleOpen(entry);
+                }}
                 onContextMenu={(e) => handleContextMenu(e, entry)}
                 onKeyDown={(e) => handleKeyDown(e, entry)}
+                tabIndex={0}
               >
+                <input
+                  type="checkbox"
+                  checked={selectedFiles.has(entry.name)}
+                  onChange={() => toggleSelection(entry.name, true)}
+                  onClick={(e) => e.stopPropagation()}
+                  className={`absolute top-1.5 left-1.5 w-3.5 h-3.5 rounded border-gray-600 bg-gray-800 text-indigo-500 focus:ring-0 cursor-pointer accent-indigo-500 ${
+                    selectedFiles.has(entry.name) || selectedFiles.size > 0 ? "opacity-100" : "opacity-0 hover:opacity-100"
+                  }`}
+                />
                 <FileIcon isDir={entry.is_dir} size={32} name={entry.name} filePath={fullPath(entry.name)} />
                 <span className="text-xs text-gray-300 truncate w-full">
                   {renamingEntry === entry.name ? renderName(entry) : entry.name}
                 </span>
-              </button>
+              </div>
             ))}
           </div>
           {contextMenu && (
@@ -505,12 +551,15 @@ export function FileList() {
 
   return (
     <div className="flex-1 flex flex-col overflow-hidden relative min-w-0">
-      {selectedFiles.size > 1 && (
+      {selectedFiles.size > 0 && (
         <BatchActionBar
           count={selectedFiles.size}
           onExport={handleBatchExport}
           onDelete={handleBatchDelete}
           onCopy={handleBatchCopy}
+          folders={availableFolders}
+          onMoveTo={handleBatchMoveTo}
+          onDeselect={() => setSelectedFiles(new Set())}
         />
       )}
       <div className="flex-1 overflow-auto" onClick={() => setContextMenu(null)}>
@@ -518,6 +567,19 @@ export function FileList() {
         <table className="w-full text-xs table-fixed">
           <thead className="sticky top-0 bg-gray-900 z-10">
             <tr className="text-gray-400 text-left">
+              <th className="py-1.5 px-1.5 w-8">
+                <input
+                  type="checkbox"
+                  checked={sorted.length > 0 && selectedFiles.size === sorted.length}
+                  ref={(el) => { if (el) el.indeterminate = selectedFiles.size > 0 && selectedFiles.size < sorted.length; }}
+                  onChange={() => {
+                    if (selectedFiles.size === sorted.length) setSelectedFiles(new Set());
+                    else setSelectedFiles(new Set(sorted.map((e) => e.name)));
+                  }}
+                  className="w-3.5 h-3.5 rounded border-gray-600 bg-gray-800 text-indigo-500 focus:ring-0 cursor-pointer accent-indigo-500"
+                  title="Select all"
+                />
+              </th>
               <th className="py-1.5 px-3 font-medium cursor-pointer hover:text-white truncate" onClick={() => setSortBy("name")}>
                 Name {sortBy === "name" && (sortAsc ? "\u2191" : "\u2193")}
               </th>
@@ -539,12 +601,23 @@ export function FileList() {
                     ? "bg-indigo-900/30"
                     : "hover:bg-gray-800/50"
                 }`}
-                onClick={(e) => toggleSelection(entry.name, e.metaKey || e.ctrlKey)}
-                onDoubleClick={() => handleOpen(entry)}
+                onClick={(e) => handleItemClick(e, entry.name)}
+                onDoubleClick={(e) => {
+                  if ((e.target as HTMLElement).closest("button, input[type=checkbox]")) return;
+                  handleOpen(entry);
+                }}
                 onContextMenu={(e) => handleContextMenu(e, entry)}
                 onKeyDown={(e) => handleKeyDown(e, entry)}
                 tabIndex={0}
               >
+                <td className="py-1.5 px-1.5 w-8" onClick={(e) => e.stopPropagation()}>
+                  <input
+                    type="checkbox"
+                    checked={selectedFiles.has(entry.name)}
+                    onChange={() => toggleSelection(entry.name, true)}
+                    className="w-3.5 h-3.5 rounded border-gray-600 bg-gray-800 text-indigo-500 focus:ring-0 cursor-pointer accent-indigo-500"
+                  />
+                </td>
                 <td className="py-1.5 px-3 truncate">
                   <div className="flex items-center gap-2 min-w-0">
                     <FileIcon isDir={entry.is_dir} size={16} name={entry.name} filePath={fullPath(entry.name)} />
@@ -583,15 +656,35 @@ export function FileList() {
   );
 }
 
-function BatchActionBar({ count, onExport, onDelete, onCopy }: {
+function BatchActionBar({ count, onExport, onDelete, onCopy, folders, onMoveTo, onDeselect }: {
   count: number;
   onExport: () => void;
   onDelete: () => void;
   onCopy: () => void;
+  folders: FileEntry[];
+  onMoveTo: (folderName: string) => void;
+  onDeselect: () => void;
 }) {
+  const [showMoveMenu, setShowMoveMenu] = useState(false);
+  const moveRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!showMoveMenu) return;
+    const handler = (e: MouseEvent) => {
+      if (moveRef.current && !moveRef.current.contains(e.target as Node)) setShowMoveMenu(false);
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [showMoveMenu]);
+
   return (
     <div className="flex items-center gap-3 px-3 py-2 bg-indigo-950/60 border-b border-indigo-800/50">
       <span className="text-xs text-indigo-300 font-medium">{count} items selected</span>
+      <button onClick={onDeselect} className="text-gray-500 hover:text-gray-300 p-0.5" title="Deselect all">
+        <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+        </svg>
+      </button>
       <div className="flex gap-1.5 ml-auto">
         <button
           onClick={onExport}
@@ -601,7 +694,7 @@ function BatchActionBar({ count, onExport, onDelete, onCopy }: {
           <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
           </svg>
-          Export All
+          Export
         </button>
         <button
           onClick={onCopy}
@@ -611,8 +704,41 @@ function BatchActionBar({ count, onExport, onDelete, onCopy }: {
           <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
           </svg>
-          Copy All
+          Copy
         </button>
+        {folders.length > 0 && (
+          <div ref={moveRef} className="relative">
+            <button
+              onClick={() => setShowMoveMenu((v) => !v)}
+              className="flex items-center gap-1.5 px-2.5 py-1 text-xs text-gray-300 bg-gray-800 hover:bg-gray-700 rounded-md transition"
+              title="Move selected files to folder"
+            >
+              <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
+              </svg>
+              Move to
+              <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+              </svg>
+            </button>
+            {showMoveMenu && (
+              <div className="absolute right-0 top-full mt-1 bg-gray-800 border border-gray-700 rounded-lg shadow-xl py-1 z-50 min-w-[140px] max-h-48 overflow-y-auto">
+                {folders.map((f) => (
+                  <button
+                    key={f.name}
+                    className="w-full text-left px-3 py-1.5 text-xs text-gray-300 hover:bg-gray-700 flex items-center gap-2"
+                    onClick={() => { onMoveTo(f.name); setShowMoveMenu(false); }}
+                  >
+                    <svg className="w-3.5 h-3.5 text-indigo-400 shrink-0" fill="currentColor" viewBox="0 0 24 24">
+                      <path d="M10 4H4a2 2 0 00-2 2v12a2 2 0 002 2h16a2 2 0 002-2V8a2 2 0 00-2-2h-8l-2-2z" />
+                    </svg>
+                    <span className="truncate">{f.name}</span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
         <button
           onClick={onDelete}
           className="flex items-center gap-1.5 px-2.5 py-1 text-xs text-red-400 bg-red-950/50 hover:bg-red-900/50 rounded-md transition"
@@ -621,7 +747,7 @@ function BatchActionBar({ count, onExport, onDelete, onCopy }: {
           <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
           </svg>
-          Delete All
+          Delete
         </button>
       </div>
     </div>

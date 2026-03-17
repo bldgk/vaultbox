@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useCallback, useState, useRef } from "react";
 import { useFileStore } from "../store/fileStore";
+import { useDialogStore } from "../store/dialogStore";
+import { deleteEntry } from "../hooks/useTauriCommands";
 import { getViewerType } from "../lib/fileTypes";
 
 const PREVIEWABLE_TYPES = new Set(["image", "media"]);
@@ -19,8 +21,10 @@ function isVideoFile(filename: string): boolean {
 
 export function FullscreenViewer() {
   const { fullscreenPreview, setFullscreenPreview, entries, currentPath } = useFileStore();
+  const { showConfirm } = useDialogStore();
   const [zoom, setZoom] = useState(1);
   const [pan, setPan] = useState({ x: 0, y: 0 });
+  const [rotation, setRotation] = useState(0);
   const [isDragging, setIsDragging] = useState(false);
   const dragStart = useRef({ x: 0, y: 0, panX: 0, panY: 0 });
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -51,6 +55,7 @@ export function FullscreenViewer() {
     const file = previewableFiles[index];
     setZoom(1);
     setPan({ x: 0, y: 0 });
+    setRotation(0);
     // Images/videos use vaultmedia:// — we only need the path, no content download.
     // Pass a dummy content object since FullscreenPreview requires it.
     setFullscreenPreview({
@@ -75,6 +80,64 @@ export function FullscreenViewer() {
   const goLast = useCallback(() => {
     if (previewableFiles.length > 0) navigateToFile(previewableFiles.length - 1);
   }, [previewableFiles.length, navigateToFile]);
+
+  const handleRotate = useCallback(() => {
+    setRotation((r) => (r + 90) % 360);
+  }, []);
+
+  const handleDelete = useCallback(() => {
+    if (!fullscreenPreview) return;
+    const fileName = fullscreenPreview.fileName;
+    const filePath = fullscreenPreview.filePath;
+    showConfirm({
+      title: "Delete File",
+      message: `Delete "${fileName}" permanently? This cannot be undone.`,
+      confirmLabel: "Delete",
+      danger: true,
+      onConfirm: async () => {
+        try {
+          await deleteEntry(filePath, true);
+          // Close tabs for deleted file
+          const state = useFileStore.getState();
+          const toClose = state.openTabs
+            .map((t, i) => ({ path: t.path, index: i }))
+            .filter((t) => t.path === filePath)
+            .reverse();
+          for (const t of toClose) {
+            useFileStore.getState().closeTab(t.index);
+          }
+          // Navigate to next/prev or close fullscreen
+          if (previewableFiles.length <= 1) {
+            setFullscreenPreview(null);
+          } else if (currentIndex < previewableFiles.length - 1) {
+            // Will navigate to next (which shifts into current index after refresh)
+            const nextFile = previewableFiles[currentIndex + 1];
+            setFullscreenPreview({
+              filePath: nextFile.path,
+              fileName: nextFile.name,
+              content: { type: "Binary", data: "" },
+            });
+          } else {
+            const prevFile = previewableFiles[currentIndex - 1];
+            setFullscreenPreview({
+              filePath: prevFile.path,
+              fileName: prevFile.name,
+              content: { type: "Binary", data: "" },
+            });
+          }
+          setRotation(0);
+          useFileStore.getState().refresh();
+        } catch (err) {
+          showConfirm({
+            title: "Error",
+            message: `Failed to delete: ${err}`,
+            confirmLabel: "OK",
+            onConfirm: () => {},
+          });
+        }
+      },
+    });
+  }, [fullscreenPreview, previewableFiles, currentIndex, setFullscreenPreview, showConfirm]);
 
   // Derive viewer type and sources (must be before early return so hooks are stable)
   const viewerType = fullscreenPreview ? getViewerType(fullscreenPreview.fileName) : null;
@@ -127,11 +190,16 @@ export function FullscreenViewer() {
         e.preventDefault();
         if (videoRef.current.paused) videoRef.current.play();
         else videoRef.current.pause();
+      } else if (e.key === "r" || e.key === "R") {
+        handleRotate();
+      } else if (e.key === "Delete" || e.key === "Backspace") {
+        e.preventDefault();
+        handleDelete();
       }
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [fullscreenPreview, goNext, goPrev, goFirst, goLast, setFullscreenPreview]);
+  }, [fullscreenPreview, goNext, goPrev, goFirst, goLast, setFullscreenPreview, handleRotate, handleDelete]);
 
   // Mouse wheel zoom
   const handleWheel = useCallback((e: React.WheelEvent) => {
@@ -177,19 +245,30 @@ export function FullscreenViewer() {
         <div className="flex items-center gap-2">
           {isImage && (
             <>
-              <button onClick={() => setZoom((z) => Math.max(z / 1.3, 0.1))} className="p-1.5 rounded hover:bg-white/10 text-gray-300" title="Zoom out">
+              <button onClick={() => setZoom((z) => Math.max(z / 1.3, 0.1))} className="p-1.5 rounded hover:bg-white/10 text-gray-300" title="Zoom out (-)">
                 <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20 12H4" /></svg>
               </button>
               <span className="text-xs text-gray-400 w-12 text-center">{Math.round(zoom * 100)}%</span>
-              <button onClick={() => setZoom((z) => Math.min(z * 1.3, 10))} className="p-1.5 rounded hover:bg-white/10 text-gray-300" title="Zoom in">
+              <button onClick={() => setZoom((z) => Math.min(z * 1.3, 10))} className="p-1.5 rounded hover:bg-white/10 text-gray-300" title="Zoom in (+)">
                 <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" /></svg>
               </button>
-              <button onClick={() => { setZoom(1); setPan({ x: 0, y: 0 }); }} className="p-1.5 rounded hover:bg-white/10 text-gray-300 text-xs" title="Reset zoom">
+              <button onClick={() => { setZoom(1); setPan({ x: 0, y: 0 }); }} className="p-1.5 rounded hover:bg-white/10 text-gray-300 text-xs" title="Reset zoom (0)">
                 Fit
               </button>
               <div className="w-px h-5 bg-gray-700 mx-1" />
             </>
           )}
+          <button onClick={handleRotate} className="p-1.5 rounded hover:bg-white/10 text-gray-300" title="Rotate (R)">
+            <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+            </svg>
+          </button>
+          <button onClick={handleDelete} className="p-1.5 rounded hover:bg-white/10 text-red-400 hover:text-red-300" title="Delete (Del)">
+            <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+            </svg>
+          </button>
+          <div className="w-px h-5 bg-gray-700 mx-1" />
           <button
             onClick={() => setFullscreenPreview(null)}
             className="p-1.5 rounded hover:bg-white/10 text-gray-300"
@@ -219,9 +298,9 @@ export function FullscreenViewer() {
             alt={fullscreenPreview.fileName}
             className="transition-transform duration-100"
             style={{
-              transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`,
-              maxWidth: zoom <= 1 ? "100%" : "none",
-              maxHeight: zoom <= 1 ? "100%" : "none",
+              transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom}) rotate(${rotation}deg)`,
+              maxWidth: zoom <= 1 && rotation % 180 === 0 ? "100%" : zoom <= 1 ? "100vh" : "none",
+              maxHeight: zoom <= 1 && rotation % 180 === 0 ? "100%" : zoom <= 1 ? "100vw" : "none",
             }}
             draggable={false}
             onDoubleClick={() => {
@@ -240,7 +319,8 @@ export function FullscreenViewer() {
             controls
             autoPlay
             src={mediaSrc}
-            className="max-w-full max-h-full"
+            className="max-w-full max-h-full transition-transform duration-200"
+            style={{ transform: rotation ? `rotate(${rotation}deg)` : undefined }}
           />
         )}
         {!mediaSrc && (

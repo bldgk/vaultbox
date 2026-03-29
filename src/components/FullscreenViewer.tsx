@@ -26,6 +26,9 @@ export function FullscreenViewer() {
   const [pan, setPan] = useState({ x: 0, y: 0 });
   const [rotation, setRotation] = useState(0);
   const [isDragging, setIsDragging] = useState(false);
+  const [videoTime, setVideoTime] = useState(0);
+  const [videoDuration, setVideoDuration] = useState(0);
+  const [videoPaused, setVideoPaused] = useState(false);
   const dragStart = useRef({ x: 0, y: 0, panX: 0, panY: 0 });
   const videoRef = useRef<HTMLVideoElement>(null);
   const thumbnailStripRef = useRef<HTMLDivElement>(null);
@@ -314,14 +317,28 @@ export function FullscreenViewer() {
           />
         )}
         {isVideo && mediaSrc && (
-          <video
-            ref={videoRef}
-            controls
-            autoPlay
-            src={mediaSrc}
-            className="max-w-full max-h-full transition-transform duration-200"
-            style={{ transform: rotation ? `rotate(${rotation}deg)` : undefined }}
-          />
+          <div className="relative flex items-center justify-center w-full h-full">
+            <video
+              ref={videoRef}
+              controls={rotation === 0}
+              autoPlay
+              src={mediaSrc}
+              className="max-w-full max-h-full transition-transform duration-200"
+              style={{
+                transform: rotation ? `rotate(${rotation}deg)` : undefined,
+                maxWidth: rotation % 180 !== 0 ? "100vh" : "100%",
+                maxHeight: rotation % 180 !== 0 ? "100vw" : "100%",
+              }}
+              onTimeUpdate={() => { if (videoRef.current) setVideoTime(videoRef.current.currentTime); }}
+              onLoadedMetadata={() => { if (videoRef.current) setVideoDuration(videoRef.current.duration); }}
+              onPlay={() => setVideoPaused(false)}
+              onPause={() => setVideoPaused(true)}
+              onClick={() => { if (rotation && videoRef.current) { videoRef.current.paused ? videoRef.current.play() : videoRef.current.pause(); } }}
+            />
+            {rotation !== 0 && (
+              <VideoControls videoRef={videoRef} time={videoTime} duration={videoDuration} paused={videoPaused} />
+            )}
+          </div>
         )}
         {!mediaSrc && (
           <div className="text-gray-500">Cannot display preview</div>
@@ -420,6 +437,46 @@ export function FullscreenViewer() {
           </svg>
         </button>
       )}
+    </div>
+  );
+}
+
+function formatTime(s: number): string {
+  if (!isFinite(s)) return "0:00";
+  const m = Math.floor(s / 60);
+  const sec = Math.floor(s % 60);
+  return `${m}:${sec.toString().padStart(2, "0")}`;
+}
+
+function VideoControls({ videoRef, time, duration, paused }: {
+  videoRef: React.RefObject<HTMLVideoElement | null>;
+  time: number;
+  duration: number;
+  paused: boolean;
+}) {
+  return (
+    <div className="absolute bottom-4 left-1/2 -translate-x-1/2 flex items-center gap-3 px-4 py-2 bg-black/80 backdrop-blur-sm rounded-full z-20 min-w-[280px]">
+      <button
+        onClick={() => { if (videoRef.current) paused ? videoRef.current.play() : videoRef.current.pause(); }}
+        className="text-white p-1"
+      >
+        {paused ? (
+          <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24"><path d="M8 5v14l11-7z" /></svg>
+        ) : (
+          <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z" /></svg>
+        )}
+      </button>
+      <span className="text-xs text-gray-400 w-10 text-right tabular-nums">{formatTime(time)}</span>
+      <input
+        type="range"
+        min={0}
+        max={duration || 1}
+        step={0.1}
+        value={time}
+        onChange={(e) => { if (videoRef.current) videoRef.current.currentTime = Number(e.target.value); }}
+        className="flex-1 h-1 accent-white cursor-pointer"
+      />
+      <span className="text-xs text-gray-400 w-10 tabular-nums">{formatTime(duration)}</span>
     </div>
   );
 }

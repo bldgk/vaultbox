@@ -14,6 +14,7 @@ export function FileList() {
     navigateTo, openTab, viewMode, sortBy, sortAsc, setSortBy,
     searchResults, loading, setLoading, clipboard, setClipboard, setFullscreenPreview,
     startBusy, stopBusy, toggleInfoPanel, setSelectedFiles, lastClickedFile,
+    multiSelectMode, setMultiSelectMode,
   } = useFileStore();
 
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; entry: FileEntry } | null>(null);
@@ -106,25 +107,56 @@ export function FileList() {
 
   const fullPath = (name: string) => currentPath ? `${currentPath}/${name}` : name;
 
-  // Unified click handler: shift=range, ctrl/cmd=toggle, plain=single select
-  const handleItemClick = (e: React.MouseEvent, name: string) => {
+  // Row click: plain=single highlight, Ctrl/Cmd=multi-select toggle, Shift=range select
+  const handleRowClick = (e: React.MouseEvent, name: string) => {
     if (e.shiftKey && lastClickedFile) {
-      // Range select from lastClickedFile to name
+      // Range select
       const anchorIdx = sorted.findIndex((f) => f.name === lastClickedFile);
       const targetIdx = sorted.findIndex((f) => f.name === name);
       if (anchorIdx >= 0 && targetIdx >= 0) {
         const start = Math.min(anchorIdx, targetIdx);
         const end = Math.max(anchorIdx, targetIdx);
-        const newSet = new Set(e.ctrlKey || e.metaKey ? selectedFiles : []);
+        const newSet = new Set(selectedFiles);
         for (let i = start; i <= end; i++) {
           newSet.add(sorted[i].name);
         }
         setSelectedFiles(newSet);
-        // Don't update lastClickedFile on shift-click (keep anchor)
-        return;
+        setMultiSelectMode(true);
+        useFileStore.getState().setLastClickedFile(name);
+      }
+      return;
+    }
+    if (e.metaKey || e.ctrlKey) {
+      // Ctrl/Cmd click — toggle into multi-select
+      toggleSelection(name, true);
+      setMultiSelectMode(true);
+      return;
+    }
+    // Plain click — single highlight (no multi-select mode)
+    setSelectedFiles(new Set([name]));
+    setMultiSelectMode(false);
+    useFileStore.getState().setLastClickedFile(name);
+  };
+
+  // Checkbox click: always multi-select mode, shift=range
+  const handleCheckboxClick = (e: React.MouseEvent<HTMLInputElement>, name: string) => {
+    e.stopPropagation();
+    setMultiSelectMode(true);
+    if (e.shiftKey && lastClickedFile) {
+      e.preventDefault();
+      const anchorIdx = sorted.findIndex((f) => f.name === lastClickedFile);
+      const targetIdx = sorted.findIndex((f) => f.name === name);
+      if (anchorIdx >= 0 && targetIdx >= 0) {
+        const start = Math.min(anchorIdx, targetIdx);
+        const end = Math.max(anchorIdx, targetIdx);
+        const newSet = new Set(selectedFiles);
+        for (let i = start; i <= end; i++) {
+          newSet.add(sorted[i].name);
+        }
+        setSelectedFiles(newSet);
+        useFileStore.getState().setLastClickedFile(name);
       }
     }
-    toggleSelection(name, e.metaKey || e.ctrlKey);
   };
 
 
@@ -489,7 +521,7 @@ export function FileList() {
   if (viewMode === "grid") {
     return (
       <div className="flex-1 flex flex-col overflow-hidden relative min-w-0">
-        {selectedFiles.size > 0 && (
+        {multiSelectMode && selectedFiles.size > 0 && (
           <BatchActionBar
             count={selectedFiles.size}
             onExport={handleBatchExport}
@@ -497,7 +529,7 @@ export function FileList() {
             onCopy={handleBatchCopy}
             folders={availableFolders}
             onMoveTo={handleBatchMoveTo}
-            onDeselect={() => setSelectedFiles(new Set())}
+            onDeselect={() => { setSelectedFiles(new Set()); setMultiSelectMode(false); }}
           />
         )}
         <div className="flex-1 overflow-auto p-3" onClick={() => setContextMenu(null)}>
@@ -506,12 +538,12 @@ export function FileList() {
             {sorted.map((entry) => (
               <div
                 key={entry.name}
-                className={`relative flex flex-col items-center gap-1 p-3 rounded-lg text-center transition cursor-pointer ${
+                className={`group relative flex flex-col items-center gap-1 p-3 rounded-lg text-center transition cursor-pointer ${
                   selectedFiles.has(entry.name)
                     ? "bg-indigo-900/50 ring-1 ring-indigo-500"
                     : "hover:bg-gray-800"
                 }`}
-                onClick={(e) => handleItemClick(e, entry.name)}
+                onClick={(e) => handleRowClick(e, entry.name)}
                 onDoubleClick={(e) => {
                   if ((e.target as HTMLElement).closest("input[type=checkbox]")) return;
                   handleOpen(entry);
@@ -524,9 +556,9 @@ export function FileList() {
                   type="checkbox"
                   checked={selectedFiles.has(entry.name)}
                   onChange={() => toggleSelection(entry.name, true)}
-                  onClick={(e) => e.stopPropagation()}
+                  onClick={(e) => handleCheckboxClick(e, entry.name)}
                   className={`absolute top-1.5 left-1.5 w-3.5 h-3.5 rounded border-gray-600 bg-gray-800 text-indigo-500 focus:ring-0 cursor-pointer accent-indigo-500 ${
-                    selectedFiles.has(entry.name) || selectedFiles.size > 0 ? "opacity-100" : "opacity-0 hover:opacity-100"
+                    multiSelectMode ? "opacity-100" : "opacity-0 group-hover:opacity-100"
                   }`}
                 />
                 <FileIcon isDir={entry.is_dir} size={32} name={entry.name} filePath={fullPath(entry.name)} />
@@ -568,17 +600,19 @@ export function FileList() {
           <thead className="sticky top-0 bg-gray-900 z-10">
             <tr className="text-gray-400 text-left">
               <th className="py-1.5 px-1.5 w-8">
-                <input
-                  type="checkbox"
-                  checked={sorted.length > 0 && selectedFiles.size === sorted.length}
-                  ref={(el) => { if (el) el.indeterminate = selectedFiles.size > 0 && selectedFiles.size < sorted.length; }}
-                  onChange={() => {
-                    if (selectedFiles.size === sorted.length) setSelectedFiles(new Set());
-                    else setSelectedFiles(new Set(sorted.map((e) => e.name)));
-                  }}
-                  className="w-3.5 h-3.5 rounded border-gray-600 bg-gray-800 text-indigo-500 focus:ring-0 cursor-pointer accent-indigo-500"
-                  title="Select all"
-                />
+                {multiSelectMode && (
+                  <input
+                    type="checkbox"
+                    checked={sorted.length > 0 && selectedFiles.size === sorted.length}
+                    ref={(el) => { if (el) el.indeterminate = selectedFiles.size > 0 && selectedFiles.size < sorted.length; }}
+                    onChange={() => {
+                      if (selectedFiles.size === sorted.length) { setSelectedFiles(new Set()); setMultiSelectMode(false); }
+                      else setSelectedFiles(new Set(sorted.map((e) => e.name)));
+                    }}
+                    className="w-3.5 h-3.5 rounded border-gray-600 bg-gray-800 text-indigo-500 focus:ring-0 cursor-pointer accent-indigo-500"
+                    title="Select all"
+                  />
+                )}
               </th>
               <th className="py-1.5 px-3 font-medium cursor-pointer hover:text-white truncate" onClick={() => setSortBy("name")}>
                 Name {sortBy === "name" && (sortAsc ? "\u2191" : "\u2193")}
@@ -596,12 +630,12 @@ export function FileList() {
             {sorted.map((entry) => (
               <tr
                 key={entry.name}
-                className={`cursor-pointer border-b border-gray-800/50 ${
+                className={`group cursor-pointer border-b border-gray-800/50 ${
                   selectedFiles.has(entry.name)
                     ? "bg-indigo-900/30"
                     : "hover:bg-gray-800/50"
                 }`}
-                onClick={(e) => handleItemClick(e, entry.name)}
+                onClick={(e) => handleRowClick(e, entry.name)}
                 onDoubleClick={(e) => {
                   if ((e.target as HTMLElement).closest("button, input[type=checkbox]")) return;
                   handleOpen(entry);
@@ -610,12 +644,15 @@ export function FileList() {
                 onKeyDown={(e) => handleKeyDown(e, entry)}
                 tabIndex={0}
               >
-                <td className="py-1.5 px-1.5 w-8" onClick={(e) => e.stopPropagation()}>
+                <td className="py-1.5 px-1.5 w-8">
                   <input
                     type="checkbox"
                     checked={selectedFiles.has(entry.name)}
                     onChange={() => toggleSelection(entry.name, true)}
-                    className="w-3.5 h-3.5 rounded border-gray-600 bg-gray-800 text-indigo-500 focus:ring-0 cursor-pointer accent-indigo-500"
+                    onClick={(e) => handleCheckboxClick(e, entry.name)}
+                    className={`w-3.5 h-3.5 rounded border-gray-600 bg-gray-800 text-indigo-500 focus:ring-0 cursor-pointer accent-indigo-500 ${
+                      multiSelectMode ? "opacity-100" : "opacity-0 group-hover:opacity-100"
+                    }`}
                   />
                 </td>
                 <td className="py-1.5 px-3 truncate">

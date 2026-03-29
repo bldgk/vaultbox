@@ -60,6 +60,7 @@ interface FileStore {
   splitView: boolean;
   splitTabIndex: number;
   lastClickedFile: string | null;
+  multiSelectMode: boolean;
 
   setCurrentPath: (path: string) => void;
   refresh: () => void;
@@ -91,6 +92,7 @@ interface FileStore {
   toggleFileList: () => void;
   toggleSplitView: () => void;
   setSplitTab: (index: number) => void;
+  setMultiSelectMode: (mode: boolean) => void;
   reset: () => void;
 }
 
@@ -119,6 +121,7 @@ export const useFileStore = create<FileStore>((set) => ({
   splitView: false,
   splitTabIndex: -1,
   lastClickedFile: null,
+  multiSelectMode: false,
 
   setCurrentPath: (path) => set({ currentPath: path }),
   refresh: () => set((state) => ({ refreshCounter: state.refreshCounter + 1 })),
@@ -205,6 +208,7 @@ export const useFileStore = create<FileStore>((set) => ({
         historyIndex: history.length - 1,
         selectedFiles: new Set(),
         lastClickedFile: null,
+        multiSelectMode: false,
         searchResults: null,
         searchQuery: "",
       };
@@ -218,6 +222,7 @@ export const useFileStore = create<FileStore>((set) => ({
         historyIndex: newIndex,
         currentPath: state.navigationHistory[newIndex],
         selectedFiles: new Set(),
+        multiSelectMode: false,
       };
     }),
 
@@ -229,6 +234,7 @@ export const useFileStore = create<FileStore>((set) => ({
         historyIndex: newIndex,
         currentPath: state.navigationHistory[newIndex],
         selectedFiles: new Set(),
+        multiSelectMode: false,
       };
     }),
 
@@ -260,6 +266,7 @@ export const useFileStore = create<FileStore>((set) => ({
       splitTabIndex: state.splitView ? -1 : state.splitTabIndex,
     })),
   setSplitTab: (index) => set({ splitTabIndex: index }),
+  setMultiSelectMode: (mode) => set({ multiSelectMode: mode }),
 
   reset: () => {
     // Null out all tab contents before resetting to release decrypted data
@@ -288,6 +295,7 @@ export const useFileStore = create<FileStore>((set) => ({
       fileListCollapsed: false,
       splitView: false,
       splitTabIndex: -1,
+      multiSelectMode: false,
     });
     // Pressure GC to reclaim all decrypted plaintext
     setTimeout(pressureGC, 0);

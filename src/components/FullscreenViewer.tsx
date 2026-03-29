@@ -323,11 +323,10 @@ export function FullscreenViewer() {
               controls={rotation === 0}
               autoPlay
               src={mediaSrc}
-              className="max-w-full max-h-full transition-transform duration-200"
+              className="w-full h-full object-contain transition-transform duration-200"
               style={{
                 transform: rotation ? `rotate(${rotation}deg)` : undefined,
-                maxWidth: rotation % 180 !== 0 ? "100vh" : "100%",
-                maxHeight: rotation % 180 !== 0 ? "100vw" : "100%",
+                ...(rotation % 180 !== 0 ? { maxWidth: "100vh", maxHeight: "100vw" } : {}),
               }}
               onTimeUpdate={() => { if (videoRef.current) setVideoTime(videoRef.current.currentTime); }}
               onLoadedMetadata={() => { if (videoRef.current) setVideoDuration(videoRef.current.duration); }}

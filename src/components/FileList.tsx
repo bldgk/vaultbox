@@ -521,17 +521,17 @@ export function FileList() {
   if (viewMode === "grid") {
     return (
       <div className="flex-1 flex flex-col overflow-hidden relative min-w-0">
-        {multiSelectMode && selectedFiles.size > 0 && (
-          <BatchActionBar
-            count={selectedFiles.size}
-            onExport={handleBatchExport}
-            onDelete={handleBatchDelete}
-            onCopy={handleBatchCopy}
-            folders={availableFolders}
-            onMoveTo={handleBatchMoveTo}
-            onDeselect={() => { setSelectedFiles(new Set()); setMultiSelectMode(false); }}
-          />
-        )}
+        <ActionBar
+          multiSelectMode={multiSelectMode}
+          selectedCount={selectedFiles.size}
+          currentPath={currentPath}
+          onExport={handleBatchExport}
+          onDelete={handleBatchDelete}
+          onCopy={handleBatchCopy}
+          folders={availableFolders}
+          onMoveTo={handleBatchMoveTo}
+          onDeselect={() => { setSelectedFiles(new Set()); setMultiSelectMode(false); }}
+        />
         <div className="flex-1 overflow-auto p-3" onClick={() => setContextMenu(null)}>
           {isDragOver && <DragOverlay />}
           <div className="grid grid-cols-[repeat(auto-fill,minmax(100px,1fr))] gap-2">
@@ -583,17 +583,17 @@ export function FileList() {
 
   return (
     <div className="flex-1 flex flex-col overflow-hidden relative min-w-0">
-      {selectedFiles.size > 0 && (
-        <BatchActionBar
-          count={selectedFiles.size}
-          onExport={handleBatchExport}
-          onDelete={handleBatchDelete}
-          onCopy={handleBatchCopy}
-          folders={availableFolders}
-          onMoveTo={handleBatchMoveTo}
-          onDeselect={() => setSelectedFiles(new Set())}
-        />
-      )}
+      <ActionBar
+        multiSelectMode={multiSelectMode}
+        selectedCount={selectedFiles.size}
+        currentPath={currentPath}
+        onExport={handleBatchExport}
+        onDelete={handleBatchDelete}
+        onCopy={handleBatchCopy}
+        folders={availableFolders}
+        onMoveTo={handleBatchMoveTo}
+        onDeselect={() => { setSelectedFiles(new Set()); setMultiSelectMode(false); }}
+      />
       <div className="flex-1 overflow-auto" onClick={() => setContextMenu(null)}>
         {isDragOver && <DragOverlay />}
         <table className="w-full text-xs table-fixed">
@@ -693,8 +693,10 @@ export function FileList() {
   );
 }
 
-function BatchActionBar({ count, onExport, onDelete, onCopy, folders, onMoveTo, onDeselect }: {
-  count: number;
+function ActionBar({ multiSelectMode, selectedCount, currentPath, onExport, onDelete, onCopy, folders, onMoveTo, onDeselect }: {
+  multiSelectMode: boolean;
+  selectedCount: number;
+  currentPath: string;
   onExport: () => void;
   onDelete: () => void;
   onCopy: () => void;
@@ -714,79 +716,94 @@ function BatchActionBar({ count, onExport, onDelete, onCopy, folders, onMoveTo, 
     return () => document.removeEventListener("mousedown", handler);
   }, [showMoveMenu]);
 
+  const showBatch = multiSelectMode && selectedCount > 0;
+
   return (
-    <div className="flex items-center gap-3 px-3 py-2 bg-indigo-950/60 border-b border-indigo-800/50">
-      <span className="text-xs text-indigo-300 font-medium">{count} items selected</span>
-      <button onClick={onDeselect} className="text-gray-500 hover:text-gray-300 p-0.5" title="Deselect all">
-        <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-        </svg>
-      </button>
-      <div className="flex gap-1.5 ml-auto">
-        <button
-          onClick={onExport}
-          className="flex items-center gap-1.5 px-2.5 py-1 text-xs text-gray-300 bg-gray-800 hover:bg-gray-700 rounded-md transition"
-          title="Export selected files"
-        >
-          <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
-          </svg>
-          Export
-        </button>
-        <button
-          onClick={onCopy}
-          className="flex items-center gap-1.5 px-2.5 py-1 text-xs text-gray-300 bg-gray-800 hover:bg-gray-700 rounded-md transition"
-          title="Copy selected files to clipboard"
-        >
-          <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
-          </svg>
-          Copy
-        </button>
-        {folders.length > 0 && (
-          <div ref={moveRef} className="relative">
+    <div className={`flex items-center gap-3 px-3 py-2 border-b ${showBatch ? "bg-indigo-950/60 border-indigo-800/50" : "bg-gray-900/50 border-gray-800/50"}`}>
+      {showBatch ? (
+        <>
+          <span className="text-xs text-indigo-300 font-medium">{selectedCount} items selected</span>
+          <button onClick={onDeselect} className="text-gray-500 hover:text-gray-300 p-0.5" title="Deselect all">
+            <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+            </svg>
+          </button>
+          <div className="flex gap-1.5 ml-auto">
             <button
-              onClick={() => setShowMoveMenu((v) => !v)}
+              onClick={onExport}
               className="flex items-center gap-1.5 px-2.5 py-1 text-xs text-gray-300 bg-gray-800 hover:bg-gray-700 rounded-md transition"
-              title="Move selected files to folder"
+              title="Export selected files"
             >
               <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
               </svg>
-              Move to
-              <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-              </svg>
+              Export
             </button>
-            {showMoveMenu && (
-              <div className="absolute right-0 top-full mt-1 bg-gray-800 border border-gray-700 rounded-lg shadow-xl py-1 z-50 min-w-[140px] max-h-48 overflow-y-auto">
-                {folders.map((f) => (
-                  <button
-                    key={f.name}
-                    className="w-full text-left px-3 py-1.5 text-xs text-gray-300 hover:bg-gray-700 flex items-center gap-2"
-                    onClick={() => { onMoveTo(f.name); setShowMoveMenu(false); }}
-                  >
-                    <svg className="w-3.5 h-3.5 text-indigo-400 shrink-0" fill="currentColor" viewBox="0 0 24 24">
-                      <path d="M10 4H4a2 2 0 00-2 2v12a2 2 0 002 2h16a2 2 0 002-2V8a2 2 0 00-2-2h-8l-2-2z" />
-                    </svg>
-                    <span className="truncate">{f.name}</span>
-                  </button>
-                ))}
+            <button
+              onClick={onCopy}
+              className="flex items-center gap-1.5 px-2.5 py-1 text-xs text-gray-300 bg-gray-800 hover:bg-gray-700 rounded-md transition"
+              title="Copy selected files to clipboard"
+            >
+              <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+              </svg>
+              Copy
+            </button>
+            {folders.length > 0 && (
+              <div ref={moveRef} className="relative">
+                <button
+                  onClick={() => setShowMoveMenu((v) => !v)}
+                  className="flex items-center gap-1.5 px-2.5 py-1 text-xs text-gray-300 bg-gray-800 hover:bg-gray-700 rounded-md transition"
+                  title="Move selected files to folder"
+                >
+                  <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
+                  </svg>
+                  Move to
+                  <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                  </svg>
+                </button>
+                {showMoveMenu && (
+                  <div className="absolute right-0 top-full mt-1 bg-gray-800 border border-gray-700 rounded-lg shadow-xl py-1 z-50 min-w-[140px] max-h-48 overflow-y-auto">
+                    {folders.map((f) => (
+                      <button
+                        key={f.name}
+                        className="w-full text-left px-3 py-1.5 text-xs text-gray-300 hover:bg-gray-700 flex items-center gap-2"
+                        onClick={() => { onMoveTo(f.name); setShowMoveMenu(false); }}
+                      >
+                        <svg className="w-3.5 h-3.5 text-indigo-400 shrink-0" fill="currentColor" viewBox="0 0 24 24">
+                          <path d="M10 4H4a2 2 0 00-2 2v12a2 2 0 002 2h16a2 2 0 002-2V8a2 2 0 00-2-2h-8l-2-2z" />
+                        </svg>
+                        <span className="truncate">{f.name}</span>
+                      </button>
+                    ))}
+                  </div>
+                )}
               </div>
             )}
+            <button
+              onClick={onDelete}
+              className="flex items-center gap-1.5 px-2.5 py-1 text-xs text-red-400 bg-red-950/50 hover:bg-red-900/50 rounded-md transition"
+              title="Delete selected files"
+            >
+              <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+              </svg>
+              Delete
+            </button>
           </div>
-        )}
-        <button
-          onClick={onDelete}
-          className="flex items-center gap-1.5 px-2.5 py-1 text-xs text-red-400 bg-red-950/50 hover:bg-red-900/50 rounded-md transition"
-          title="Delete selected files"
-        >
-          <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+        </>
+      ) : (
+        <>
+          <svg className="w-3.5 h-3.5 text-gray-500 shrink-0" fill="currentColor" viewBox="0 0 24 24">
+            <path d="M10 4H4a2 2 0 00-2 2v12a2 2 0 002 2h16a2 2 0 002-2V8a2 2 0 00-2-2h-8l-2-2z" />
           </svg>
-          Delete
-        </button>
-      </div>
+          <span className="text-xs text-gray-500 truncate">
+            {currentPath ? currentPath.split("/").pop() || "/" : "/"}
+          </span>
+        </>
+      )}
     </div>
   );
 }
